@@ -5,7 +5,7 @@
 # PDG3Android — Proyect Drakengard 3 Android (PS3 → Android ARM64)
 
 <p align="center">
-  <img src="assets/pdg3android_project_logo.png" alt="PDG3Android Logo" width="520" />
+  <img src="assets/pdg3android_logo_white_rounded.png" alt="PDG3Android Logo" width="520" />
 </p>
 
 > **Project Status:** **Active Development (`v0.6.1`)** — Playable and actively maintained with Vulkan renderer and Android launcher optimizations.  
