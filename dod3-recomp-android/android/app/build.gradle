@@ -1,0 +1,85 @@
+plugins {
+    id 'com.android.application'
+}
+
+def appVersionCode = 3
+def appVersionName = '0.6.1'
+
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.isFile()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+def releaseStorePath = System.getenv('PDG3_STORE_FILE') ?: keystoreProps.getProperty('storeFile')
+def releaseStorePass = System.getenv('PDG3_STORE_PASSWORD') ?: keystoreProps.getProperty('storePassword')
+def releaseKeyAlias  = System.getenv('PDG3_KEY_ALIAS') ?: keystoreProps.getProperty('keyAlias')
+def releaseKeyPass   = System.getenv('PDG3_KEY_PASSWORD') ?: keystoreProps.getProperty('keyPassword')
+def releaseKeystore  = releaseStorePath ? rootProject.file(releaseStorePath) : null
+def hasReleaseSign   = releaseKeystore != null && releaseKeystore.isFile() && releaseStorePass && releaseKeyAlias && releaseKeyPass
+
+android {
+    namespace 'com.pdg3android.xgowther2102'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.pdg3android.xgowther2102'
+        minSdk 26
+        targetSdk 34
+        versionCode appVersionCode
+        versionName appVersionName
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        buildConfigField 'String', 'VERSION_TAG', '"' + appVersionName + '"'
+    }
+
+    signingConfigs {
+        if (hasReleaseSign) {
+            release {
+                storeFile releaseKeystore
+                storePassword releaseStorePass
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPass
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            jniDebuggable true
+            versionNameSuffix '-debug'
+            buildConfigField 'String', 'VERSION_TAG', '"' + appVersionName + '-debug"'
+        }
+        release {
+            debuggable false
+            jniDebuggable false
+            minifyEnabled false
+            if (hasReleaseSign) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}

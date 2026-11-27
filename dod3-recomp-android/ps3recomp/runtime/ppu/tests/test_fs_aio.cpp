@@ -1,0 +1,238 @@
+/*
+ * ps3recomp - cellFsAioRead / cellFsAioWrite on a shared fd (ppu_fs.cpp).
+ *
+ * An AIO read names its own offset. It must not move the fd's position for
+ * the plain cellFsRead that follows, and several guest threads (FIOS media
+ * threads, audio streamers) issue them on one fd at once. The fixture writes
+ * a file whose every 4-byte word holds its own offset, then checks both:
+ * a cellFsRead after an AIO read continues from the fd's position, and
+ * reads racing from four threads each get the words they asked for. First
+ * of all, an AIO write lands at its own offset, and reads and writes draw
+ * their ids from one counter: with one each, a read and a write shared one.
+ *
+ *   tools/test_ppu_fs_aio.py
+ *   test_fs_aio [DIR]     (DIR: where the file goes; default the temp dir)
+ */
+#include "ppu_fs.cpp"
+#include <thread>
+#include <vector>
+#ifndef _WIN32
+#include <signal.h>
+#include <sys/mman.h>
+#endif
+
+/* ---- link stubs: nothing on the paths this test drives calls them ---- */
+extern "C" {
+uint8_t* vm_base = nullptr;
+uint32_t ppu_vm_size = 0;
+void vm_write32(uint64_t a, uint32_t v) { uint32_t be = __builtin_bswap32(v); memcpy(vm_base + a, &be, 4); }
+void vm_write64(uint64_t a, uint64_t v) { uint64_t be = __builtin_bswap64(v); memcpy(vm_base + a, &be, 8); }
+void ppu_guest_caller(char* out, size_t n) { if (n) out[0] = 0; }
+void ps3_vfs_ps3game_fallback(char* path, size_t cap) { (void)path; (void)cap; }
+void ydkj_host_bt(const char* tag) { (void)tag; }
+void ps3_hle_register_ctx(uint32_t, const char*, void (*)(ppu_context*)) {}
+/* the fork's runtime: no page is watched, read timing off */
+void vm_watch_touch(uint32_t ea, uint32_t len) { (void)ea; (void)len; }
+void (*g_ps3_fs_host_path)(char* out, size_t cap, const char* guest);   /* cellSysutil's */
+double fs_read_time_start(void) { return 0.0; }
+void fs_read_time_log(const char* kind, int fd, uint64_t off, uint64_t size, uint64_t got, double t_start)
+{ (void)kind; (void)fd; (void)off; (void)size; (void)got; (void)t_start; }
+}
+/* ps3_dev_flash_path (runtime/platform), which host_path calls for /dev_flash: the real one, it needs nothing. */
+#include "../../platform/ps3_dev_flash.c"
+ps3_guest_caller_fn g_ps3_guest_caller = nullptr;
+const char* edat_resolve(const char* host_path, char* buf, size_t cap) { (void)buf; (void)cap; return host_path; }
+
+static uint32_t rd32(uint32_t a) { uint32_t v; memcpy(&v, vm_base + a, 4); return __builtin_bswap32(v); }
+static uint64_t rd64(uint32_t a) { uint64_t v; memcpy(&v, vm_base + a, 8); return __builtin_bswap64(v); }
+static void wr32(uint32_t a, uint32_t v) { vm_write32(a, v); }
+static void wr64(uint32_t a, uint64_t v) { vm_write64(a, v); }
+
+static int fails = 0;
+#define CHECK(c, ...) do { printf((c) ? "[PASS] " : "[FAIL] "); printf(__VA_ARGS__); printf("\n"); \
+                           if (!(c)) fails++; } while (0)
+
+static const uint32_t WORDS = 1u << 16;   /* 256 KiB file */
+
+/* One AIO read (or write) of `len` bytes at `off` into (from) guest `buf`,
+ * through a CellFsAio at guest `aio`: {fd u32, pad, offset u64, buf u32, pad,
+ * size u64}. The request's id goes to guest `id_ptr` when it is not 0. */
+static void aio_submit(void (*op)(ppu_context*), uint32_t aio, uint32_t fd, uint64_t off, uint32_t buf,
+                       uint64_t len, uint32_t id_ptr)
+{
+    wr32(aio + 0x00, fd); wr64(aio + 0x08, off); wr32(aio + 0x10, buf); wr64(aio + 0x18, len);
+    ppu_context ctx; memset(&ctx, 0, sizeof ctx);
+    ctx.gpr[3] = aio; ctx.gpr[4] = id_ptr; ctx.gpr[5] = 0;
+    op(&ctx);
+}
+static void aio_read(uint32_t aio, uint32_t fd, uint64_t off, uint32_t buf, uint64_t len, uint32_t id_ptr = 0)
+{
+    aio_submit(cellFsAioRead, aio, fd, off, buf, len, id_ptr);
+}
+static void aio_write(uint32_t aio, uint32_t fd, uint64_t off, uint32_t buf, uint64_t len, uint32_t id_ptr = 0)
+{
+    aio_submit(cellFsAioWrite, aio, fd, off, buf, len, id_ptr);
+}
+
+/* Every word at file offset o holds o (big-endian), so a buffer read from
+ * offset `off` is right iff word i holds off + 4*i. */
+static bool holds(uint32_t buf, uint64_t off, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i += 4) if (rd32(buf + i) != (uint32_t)(off + i)) return false;
+    return true;
+}
+
+#ifndef _WIN32
+/* Stand-in for the VEH that commits reserved guest pages on first touch: the
+ * guest region is PROT_NONE, a user-mode fault commits the page, but a kernel
+ * access (write(2) from a stdio flush) just fails with EFAULT. */
+static uint8_t* g_res; static size_t g_res_len;
+static void commit_page(int, siginfo_t* si, void*)
+{
+    /* The host's page size: Apple Silicon's is 16 KB, and mprotect refuses an
+     * address that is only 4 KB aligned, so the fault would repeat forever. */
+    const uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t a = (uintptr_t)si->si_addr & ~(page - 1);
+    if (a < (uintptr_t)g_res || a >= (uintptr_t)g_res + g_res_len) _exit(3);
+    mprotect((void*)a, page, PROT_READ | PROT_WRITE);
+}
+
+/* cellFsAioWrite must pre-fault its source like cellFsWrite and cellFsAioRead. */
+static void test_aio_write_prefault(const char* dir)
+{
+    const uint32_t SZ = 0x10000;
+    g_res_len = 1 << 20;
+    g_res = (uint8_t*)mmap(nullptr, g_res_len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    struct sigaction sa; memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = commit_page; sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);    /* what macOS raises on a PROT_NONE page */
+    uint8_t* saved = vm_base; uint32_t saved_sz = ppu_vm_size;
+    vm_base = g_res; ppu_vm_size = (uint32_t)g_res_len;
+
+    /* path + out pointers live in pages the test commits itself */
+    mprotect(g_res, 0x1000, PROT_READ | PROT_WRITE);
+    strcpy((char*)g_res + 0x100, "/dev_hdd1/ps3recomp_fs_aiow.bin");
+    char host[1100]; snprintf(host, sizeof host, "%s/ps3recomp_fs_aiow.bin", dir);
+    ppu_context c; memset(&c, 0, sizeof c);
+    c.gpr[3] = 0x100; c.gpr[4] = 2 /* RDWR */ | 0x40 /* CREAT */ | 0x200 /* TRUNC */; c.gpr[5] = 0x200;
+    cellFsOpen(&c);
+    const uint32_t fd = rd32(0x200);
+    CHECK((uint32_t)c.gpr[3] == 0, "cellFsOpen for the write test (fd %u)", fd);
+    if ((uint32_t)c.gpr[3] == 0) {
+        /* source buffer is 16 untouched pages */
+        wr32(0x300, fd); wr64(0x308, 0); wr32(0x310, 0x20000); wr64(0x318, SZ);
+        memset(&c, 0, sizeof c); c.gpr[3] = 0x300;
+        cellFsAioWrite(&c);
+        memset(&c, 0, sizeof c); c.gpr[3] = fd; cellFsClose(&c);
+        struct stat st; bool ok = stat(host, &st) == 0 && (uint64_t)st.st_size == SZ;
+        CHECK(ok, "cellFsAioWrite from untouched guest pages writes all %u bytes (file is %lld)",
+              SZ, (long long)(stat(host, &st) == 0 ? st.st_size : -1));
+    }
+    remove(host);
+    signal(SIGSEGV, SIG_DFL);
+    signal(SIGBUS, SIG_DFL);
+    vm_base = saved; ppu_vm_size = saved_sz;
+    munmap(g_res, g_res_len);
+}
+#endif
+
+int main(int argc, char** argv)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    static uint8_t mem[1 << 20];
+    vm_base = mem; ppu_vm_size = sizeof mem;
+
+    const char* dir = argc > 1 ? argv[1] : getenv("TMPDIR");
+    if (!dir) dir = "/tmp";
+    char host[1100];
+    snprintf(host, sizeof host, "%s/ps3recomp_fs_aio.bin", dir);
+    {
+        FILE* f = fopen(host, "wb");
+        if (!f) { printf("FAIL: could not create %s\n", host); return 1; }
+        for (uint32_t i = 0; i < WORDS; i++) { uint32_t be = __builtin_bswap32(i * 4); fwrite(&be, 4, 1, f); }
+        fclose(f);
+    }
+
+    ppu_vfs_root = dir;
+    ppu_context ctx;
+
+    /* 1. An AIO write lands at its own offset and leaves the fd's position;
+     *    reads and writes never share an id. First, so neither has drawn an
+     *    id yet: two counters would both start at 1. */
+    char whost[1100];
+    snprintf(whost, sizeof whost, "%s/ps3recomp_fs_aio_w.bin", dir);
+    strcpy((char*)mem + 0x100, "/dev_hdd1/ps3recomp_fs_aio_w.bin");
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = 0x100; ctx.gpr[4] = 0x242 /* RDWR|CREAT|TRUNC */; ctx.gpr[5] = 0x200;
+    cellFsOpen(&ctx);
+    const uint32_t wfd = rd32(0x200);
+    CHECK((uint32_t)ctx.gpr[3] == 0, "cellFsOpen(O_RDWR|O_CREAT|O_TRUNC) returns CELL_OK (fd %u)", wfd);
+    for (uint32_t i = 0; i < 0x100; i += 4) wr32(0x3000 + i, 0x1000 + i);
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = wfd; ctx.gpr[4] = 0x20; ctx.gpr[5] = 0 /* SET */; ctx.gpr[6] = 0x208;
+    cellFsLseek(&ctx);
+    std::vector<uint32_t> ids;
+    for (int r = 0; r < 4; r++) {
+        aio_write(0x300, wfd, 0x1000, 0x3000, 0x100, 0x280); ids.push_back(rd32(0x280));
+        aio_read(0x340, wfd, 0x1000, 0x4000, 0x100, 0x284);  ids.push_back(rd32(0x284));
+    }
+    CHECK(holds(0x4000, 0x1000, 0x100), "an AIO read returns what the AIO write put at offset 0x1000");
+    bool unique = true;
+    for (size_t i = 0; i < ids.size(); i++)
+        for (size_t j = i + 1; j < ids.size(); j++) if (ids[i] == ids[j]) unique = false;
+    CHECK(unique, "interleaved AIO reads and writes get distinct ids (write %u, read %u, write %u, ...)",
+          ids[0], ids[1], ids[2]);
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = wfd; ctx.gpr[4] = 0; ctx.gpr[5] = 1 /* CUR */; ctx.gpr[6] = 0x208;
+    cellFsLseek(&ctx);
+    CHECK(rd64(0x208) == 0x20, "the fd's position is still 0x20 after the AIO write (0x%llX)",
+          (unsigned long long)rd64(0x208));
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = wfd;
+    cellFsClose(&ctx);
+    remove(whost);
+
+    strcpy((char*)mem + 0x100, "/dev_hdd1/ps3recomp_fs_aio.bin");
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = 0x100; ctx.gpr[4] = 0 /* O_RDONLY */; ctx.gpr[5] = 0x200;
+    cellFsOpen(&ctx);
+    const uint32_t fd = rd32(0x200);
+    CHECK((uint32_t)ctx.gpr[3] == 0, "cellFsOpen returns CELL_OK (fd %u)", fd);
+    if ((uint32_t)ctx.gpr[3] != 0) { remove(host); return 1; }
+
+    /* 2. The fd's position survives an AIO read. */
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = fd; ctx.gpr[4] = 0x40; ctx.gpr[5] = 0 /* SET */; ctx.gpr[6] = 0x208;
+    cellFsLseek(&ctx);
+    aio_read(0x300, fd, 0x8000, 0x1000, 0x100);
+    CHECK(holds(0x1000, 0x8000, 0x100), "the AIO read returns the words at its own offset");
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = fd; ctx.gpr[4] = 0x2000; ctx.gpr[5] = 16; ctx.gpr[6] = 0x210;
+    cellFsRead(&ctx);
+    CHECK(rd64(0x210) == 16 && holds(0x2000, 0x40, 16),
+          "cellFsRead after it continues from the fd's position 0x40 (got word 0x%08X)", rd32(0x2000));
+
+    /* 3. AIO reads racing on the same fd each get their own bytes. */
+    const int THREADS = 4, ROUNDS = 2000;
+    const uint32_t LEN = 0x400;
+    std::vector<int> bad(THREADS, 0);
+    std::vector<std::thread> ts;
+    for (int t = 0; t < THREADS; t++)
+        ts.emplace_back([&, t] {
+            const uint32_t aio = 0x400 + 0x40 * t, buf = 0x10000 + 0x10000 * t;
+            uint32_t seed = 0x9E3779B9u * (t + 1);
+            for (int r = 0; r < ROUNDS; r++) {
+                seed = seed * 1664525u + 1013904223u;
+                const uint64_t off = (uint64_t)(seed % (WORDS * 4 - LEN)) & ~3ull;
+                aio_read(aio, fd, off, buf, LEN);
+                if (!holds(buf, off, LEN)) bad[t]++;
+            }
+        });
+    for (auto& th : ts) th.join();
+    int total = 0; for (int b : bad) total += b;
+    CHECK(total == 0, "%d racing AIO reads over %d threads, %d returned the wrong bytes",
+          THREADS * ROUNDS, THREADS, total);
+
+    memset(&ctx, 0, sizeof ctx); ctx.gpr[3] = fd;
+    cellFsClose(&ctx);
+    remove(host);
+#ifndef _WIN32
+    test_aio_write_prefault(dir);
+#endif
+    printf("%s (%d failed)\n", fails ? "FAIL" : "PASS", fails);
+    return fails ? 1 : 0;
+}

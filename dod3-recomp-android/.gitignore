@@ -1,0 +1,69 @@
+# The game's files: everyone supplies their own, none are ever committed
+game/
+elf/
+*.ELF
+*.elf
+*.BIN
+*.bin
+*.iso
+*.ISO
+*.pkg
+*.rap
+*.edat
+*.EDAT
+# ...but the pipeline list of the shader cache a release ships is the port's
+!shaders/dxbc/pipelines.bin
+
+# Written by the game and the installer
+gamedata/
+cache/
+fw/
+keys.txt
+dod3.log
+dod3.prev.log
+
+# Build output and generated sources
+build/
+build-*/
+build_*/
+recompiled/
+recompiled_*/
+spu/
+out/
+dist/
+deps/
+__pycache__/
+.venv/
+
+# Captures and frame grabs
+*.rsxcap
+*.ppm
+
+# Editors, IDEs and toolchains
+.vs/
+.vscode/
+.idea/
+CMakeUserPresets.json
+compile_commands.json
+*.pdb
+*.ilk
+.DS_Store
+Thumbs.db
+
+# Notes that stay on this machine
+*.local.md
+
+# Android Gradle, signing keys, APKs, and prebuilt native binary
+android/.gradle/
+third_party_android/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+android/keystore.properties
+android/app/src/main/jniLibs/arm64-v8a/libdod3.so
+*.apk
+*.aab
+*.jks
+*.keystore
+logs/

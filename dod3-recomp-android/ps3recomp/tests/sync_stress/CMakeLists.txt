@@ -1,0 +1,229 @@
+# ps3recomp - tests/sync_stress
+#
+# Deterministic lv2 sync-primitive stress suite.
+# Standalone project: its OWN build dir, never yakuza\build.
+#
+# Build on Windows (chain in ONE command -- Launch-VsDevShell is blocked in
+# this harness; shell state does not persist between tool calls):
+#
+#   cmd /c "call ""C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"" >nul && cmake -S tests\sync_stress -B tests\sync_stress\build -G Ninja && ninja -C tests\sync_stress\build"
+#
+# Build on Linux / macOS:
+#
+#   cmake -S tests/sync_stress -B tests/sync_stress/build -G Ninja && ninja -C tests/sync_stress/build
+#
+# Run:
+#   .\tests\sync_stress\build\sync_stress.exe [seed]     (Windows)
+#   ./tests/sync_stress/build/sync_stress [seed]          (POSIX)
+#
+# The harness is written against Win32 threads, events and interlocked ops.
+# Off Windows those come from runtime/platform/win32_compat.h, so the same
+# source runs on every host -- and doubles as a stress test of that shim.
+#
+cmake_minimum_required(VERSION 3.20)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(sync_stress LANGUAGES C)
+    enable_testing()
+endif()
+
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+# ---------------------------------------------------------------------------
+# Location of the ps3recomp runtime sources under test. Overridable so a
+# seeded-bug self-test can point PS3RECOMP_TREE_ROOT at a temp MIRROR of the
+# runtime/+include/ tree (e.g. with sys_cond.c mutated) without touching the
+# real one. The mirror must keep the same relative layout (runtime/syscalls,
+# runtime/ppu, runtime/memory, include/ps3emu) because the runtime headers
+# use relative includes like "../ppu/ppu_context.h".
+#   cmake -DPS3RECOMP_TREE_ROOT=C:\path\to\temp\tree ...
+#   (RUNTIME_SYNC_DIR alone can also be overridden if only the four .c/.h
+#   sync files were copied into an otherwise-normal tree layout.)
+# ---------------------------------------------------------------------------
+get_filename_component(PS3RECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+
+if(NOT DEFINED PS3RECOMP_TREE_ROOT)
+    set(PS3RECOMP_TREE_ROOT "${PS3RECOMP_ROOT}")
+endif()
+
+if(NOT DEFINED RUNTIME_SYNC_DIR)
+    set(RUNTIME_SYNC_DIR "${PS3RECOMP_TREE_ROOT}/runtime/syscalls")
+endif()
+
+add_executable(sync_stress
+    main.c
+    test_shims.c
+    "${RUNTIME_SYNC_DIR}/sys_mutex.c"
+    "${RUNTIME_SYNC_DIR}/sys_cond.c"
+    "${RUNTIME_SYNC_DIR}/sys_semaphore.c"
+    "${RUNTIME_SYNC_DIR}/sys_event.c"
+    "${RUNTIME_SYNC_DIR}/sys_rwlock.c"
+    # the cached getenv (ps3_getenv_cached, include/ps3emu/env_cache.h) the
+    # sync sources read their knobs through; its table lives here
+    "${PS3RECOMP_TREE_ROOT}/runtime/platform/env_cache.c"
+)
+if(NOT WIN32)
+    # The Win32 handle, wait and thread API the harness drives.
+    target_sources(sync_stress PRIVATE
+        "${PS3RECOMP_TREE_ROOT}/runtime/platform/win32_compat.c")
+endif()
+
+target_include_directories(sync_stress PRIVATE
+    "${RUNTIME_SYNC_DIR}"
+    "${PS3RECOMP_TREE_ROOT}/runtime"
+    "${PS3RECOMP_TREE_ROOT}/include"
+)
+
+if(MSVC)
+    target_compile_options(sync_stress PRIVATE
+        /W3 /wd4100 /wd4244 /wd4267
+        /experimental:c11atomics
+    )
+    target_compile_definitions(sync_stress PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(sync_stress PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    find_package(Threads REQUIRED)
+    target_link_libraries(sync_stress PRIVATE Threads::Threads)
+endif()
+
+add_test(NAME sync_stress COMMAND sync_stress)
+set_tests_properties(sync_stress PROPERTIES
+    LABELS "stress;runtime;sync"
+    TIMEOUT 120
+)
+# The same suite with MUTEX_WATCH=1, which turns an infinite sys_mutex_lock
+# into 5 s timed slices that report the owner, and with MUTEX_WATCH=2, which
+# keeps the blocking lock and has a reporter thread name long waiters (POSIX;
+# Windows ignores both). The diagnostic must not cost the lock any of its
+# guarantees.
+foreach(watch 1 2)
+    add_test(NAME sync_stress_mutex_watch${watch} COMMAND sync_stress)
+    set_tests_properties(sync_stress_mutex_watch${watch} PROPERTIES
+        LABELS "stress;runtime;sync"
+        TIMEOUT 120
+        ENVIRONMENT "MUTEX_WATCH=${watch}"
+    )
+endforeach()
+
+# Error returns and timeouts of the lv2 mutex, semaphore, rwlock and cond
+# (trylock EDEADLK, destroy EBUSY, a destroy racing a call in flight, timed
+# rwlock, huge timeouts, attribute names).
+add_executable(test_sync_semantics
+    test_sync_semantics.c test_shims.c
+    "${RUNTIME_SYNC_DIR}/sys_mutex.c"
+    "${RUNTIME_SYNC_DIR}/sys_cond.c"
+    "${RUNTIME_SYNC_DIR}/sys_semaphore.c"
+    "${RUNTIME_SYNC_DIR}/sys_rwlock.c"
+    # the cached getenv the sync objects read their knobs through
+    "${PS3RECOMP_TREE_ROOT}/runtime/platform/env_cache.c")
+# The semaphore and rwlock sources call ps3_sync_test_hook (defined by the test)
+# at the points where it parks a call to order a destroy against it.
+target_compile_definitions(test_sync_semantics PRIVATE PS3_SYNC_TEST_HOOKS)
+if(NOT WIN32)
+    target_sources(test_sync_semantics PRIVATE
+        "${PS3RECOMP_TREE_ROOT}/runtime/platform/win32_compat.c")
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_sync_semantics PRIVATE Threads::Threads)
+else()
+    target_link_libraries(test_sync_semantics PRIVATE winmm)   # timeBeginPeriod
+endif()
+target_include_directories(test_sync_semantics PRIVATE
+    "${PS3RECOMP_TREE_ROOT}" "${PS3RECOMP_TREE_ROOT}/include"
+    "${RUNTIME_SYNC_DIR}" "${PS3RECOMP_TREE_ROOT}/runtime")
+if(MSVC)
+    target_compile_definitions(test_sync_semantics PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(test_sync_semantics PRIVATE /experimental:c11atomics)
+else()
+    target_compile_options(test_sync_semantics PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+add_test(NAME sync_semantics COMMAND test_sync_semantics)
+set_tests_properties(sync_semantics PROPERTIES LABELS "runtime;sync" TIMEOUT 60)
+
+# cellSyncMutex*: CELL_SYNC_ERROR_ALIGN for a mutex that is not 4-byte aligned.
+# Links libs/sync/cellSync.c alone; the SPU lock-line hooks are stubbed.
+add_executable(test_cellsync_mutex
+    test_cellsync_mutex.c
+    "${PS3RECOMP_TREE_ROOT}/libs/sync/cellSync.c")
+target_include_directories(test_cellsync_mutex PRIVATE
+    "${PS3RECOMP_TREE_ROOT}" "${PS3RECOMP_TREE_ROOT}/include"
+    "${PS3RECOMP_TREE_ROOT}/libs/sync")
+if(MSVC)
+    target_compile_definitions(test_cellsync_mutex PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(test_cellsync_mutex PRIVATE /experimental:c11atomics)
+else()
+    target_compile_options(test_cellsync_mutex PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+add_test(NAME cellsync_mutex COMMAND test_cellsync_mutex)
+set_tests_properties(cellsync_mutex PROPERTIES LABELS "runtime;sync" TIMEOUT 20)
+
+# sys_mutex_destroy: EBUSY while the mutex is held or a thread is blocked
+# acquiring it. Win32 host threads, through the shim off Windows.
+add_executable(test_mutex_destroy
+    test_mutex_destroy.c test_shims.c
+    "${RUNTIME_SYNC_DIR}/sys_mutex.c"
+    "${RUNTIME_SYNC_DIR}/sys_cond.c"
+    # the cached getenv the sync objects read their knobs through
+    "${PS3RECOMP_TREE_ROOT}/runtime/platform/env_cache.c")
+if(NOT WIN32)
+    target_sources(test_mutex_destroy PRIVATE
+        "${PS3RECOMP_TREE_ROOT}/runtime/platform/win32_compat.c")
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_mutex_destroy PRIVATE Threads::Threads)
+endif()
+target_include_directories(test_mutex_destroy PRIVATE
+    "${PS3RECOMP_TREE_ROOT}" "${PS3RECOMP_TREE_ROOT}/include"
+    "${RUNTIME_SYNC_DIR}" "${PS3RECOMP_TREE_ROOT}/runtime")
+if(MSVC)
+    target_compile_definitions(test_mutex_destroy PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME mutex_destroy COMMAND test_mutex_destroy)
+set_tests_properties(mutex_destroy PROPERTIES LABELS "runtime;sync" TIMEOUT 20)
+
+# The focused condition tests use Win32 host threads. POSIX execution also
+# needs the waitable-handle implementation supplied by the native host port.
+if(WIN32)
+    add_executable(test_cond_semantics
+        test_cond_semantics.c test_shims.c
+        "${RUNTIME_SYNC_DIR}/sys_mutex.c"
+        "${RUNTIME_SYNC_DIR}/sys_cond.c"
+        # the cached getenv the sync objects read their knobs through
+        "${PS3RECOMP_TREE_ROOT}/runtime/platform/env_cache.c")
+    target_include_directories(test_cond_semantics PRIVATE
+        "${PS3RECOMP_TREE_ROOT}" "${PS3RECOMP_TREE_ROOT}/include")
+    target_compile_definitions(test_cond_semantics PRIVATE _CRT_SECURE_NO_WARNINGS)
+    foreach(mode owner recursive spurious)
+        add_test(NAME cond_${mode} COMMAND test_cond_semantics ${mode})
+        set_tests_properties(cond_${mode} PROPERTIES TIMEOUT 10)
+    endforeach()
+endif()
+
+# sys_event_queue_destroy modes (EINVAL / EBUSY / FORCE -> ECANCELED), ports
+# disconnected from a destroyed queue, a destroy racing a receive or a periodic
+# timer send in flight, and the absolute deadline of a timed receive. Links
+# sys_event.c, and sys_timer.c off Windows (the timer's queue admission).
+add_executable(test_event_queue_destroy
+    test_event_queue_destroy.c test_shims.c
+    "${RUNTIME_SYNC_DIR}/sys_event.c"
+    # the cached getenv sys_event.c and sys_timer.c read their knobs through
+    "${PS3RECOMP_TREE_ROOT}/runtime/platform/env_cache.c")
+# sys_event.c calls ps3_sync_test_hook (defined by the test) at the points where
+# the test parks a call to order a destroy against it.
+target_compile_definitions(test_event_queue_destroy PRIVATE PS3_SYNC_TEST_HOOKS)
+if(NOT WIN32)
+    target_sources(test_event_queue_destroy PRIVATE
+        "${PS3RECOMP_TREE_ROOT}/runtime/platform/win32_compat.c"
+        "${RUNTIME_SYNC_DIR}/sys_timer.c")
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_event_queue_destroy PRIVATE Threads::Threads)
+endif()
+target_include_directories(test_event_queue_destroy PRIVATE
+    "${PS3RECOMP_TREE_ROOT}" "${PS3RECOMP_TREE_ROOT}/include"
+    "${RUNTIME_SYNC_DIR}" "${PS3RECOMP_TREE_ROOT}/runtime")
+if(MSVC)
+    target_compile_definitions(test_event_queue_destroy PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(test_event_queue_destroy PRIVATE /experimental:c11atomics)
+else()
+    target_compile_options(test_event_queue_destroy PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+add_test(NAME event_queue_destroy COMMAND test_event_queue_destroy)
+set_tests_properties(event_queue_destroy PROPERTIES LABELS "runtime;sync" TIMEOUT 60)

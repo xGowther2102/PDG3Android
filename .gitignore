@@ -1,0 +1,63 @@
+# Archivos y carpetas locales no subidos al repositorio
+_local_data/
+releases/
+
+# Cachés y salidas de compilación (C/C++ y Android Gradle)
+build-android/
+dod3-recomp-android/build-android/
+dod3-recomp-android/build/
+dod3-recomp-android/build-*/
+dod3-recomp-android/build_*/
+dod3-recomp-android/recompiled/
+dod3-recomp-android/recompiled_*/
+dod3-recomp-android/spu/
+dod3-recomp-android/out/
+dod3-recomp-android/dist/
+dod3-recomp-android/deps/
+dod3-recomp-android/.venv/
+dod3-recomp-android/third_party_android/
+dod3-recomp-android/android/.gradle/
+dod3-recomp-android/android/build/
+dod3-recomp-android/android/app/build/
+dod3-recomp-android/android/app/.cxx/
+dod3-recomp-android/android/local.properties
+dod3-recomp-android/android/keystore.properties
+dod3-recomp-android/android/app/src/main/jniLibs/arm64-v8a/libdod3.so
+
+# Binarios empaquetados y llaves de firma (publicar APKs en GitHub Releases)
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# IDE, Python y sistema
+*.iml
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+captures/
+__pycache__/
+*.pyc
+*.log
+*.local.md
+
+# Archivos del juego, actualizaciones, DLCs y mods (cada usuario aporta los propios)
+*.iso
+*.ISO
+*.pkg
+*.PKG
+*.rap
+*.edat
+*.EDAT
+game/
+elf/
+dlc/
+mods/
+gamedata/
+cache/
+fw/
+logs/
+keys.txt
+dod3.log
+dod3.prev.log
