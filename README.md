@@ -34,6 +34,9 @@
 * **[ps3libraries](https://github.com/ps3dev/ps3libraries):** referencia de librerías y utilidades del ecosistema homebrew PS3.
 * **[minimp3](https://github.com/lieff/minimp3) & zlib:** decodificación de pistas de audio MP3 y descompresión nativa EdgeZlib.
 
+### Mención honorífica
+* **[TraduSquare](https://tradusquare.es/proyectos/drakengard-3/) y el equipo de Traducciones Vacuno:** reconocimiento especial por el proyecto de traducción al español de *Drakengard 3* (historia principal, menús, capítulos DLC y cinemáticas subtituladas), compatible como complemento opcional en `/sdcard/Drakengard3/mods/`.
+
 ---
 
 ## Capturas de muestra
@@ -106,7 +109,12 @@ En el almacenamiento interno del dispositivo (`Almacenamiento interno/Drakengard
 > [!IMPORTANT]
 > Todos los archivos son aportados por el usuario desde sus propias copias de respaldo. El APK no incluye ISO, claves ni paquetes multimedia con derechos de autor.
 
-### 3. Asistente inicial
+### 3. Traducción al Español (Opcional — TraduSquare / Traducciones Vacuno)
+* Descargar los paquetes de traducción desde la página oficial del proyecto en **[TraduSquare · Drakengard 3](https://tradusquare.es/proyectos/drakengard-3/)**.
+* Ubicar los archivos descargados (`.pkg` de traducción/DLC y `MOVIES.ZIP` para cinemáticas subtituladas) en la carpeta dedicada `/sdcard/Drakengard3/mods/`, o importarlos directamente desde el asistente o la pestaña **Mods**.
+* El launcher detecta los paquetes automáticamente y activa el idioma español en el sistema sin alterar la `.iso` base.
+
+### 4. Asistente inicial
 1. Abrir **PDG3Android**.
 2. Seguir la **Guía de Instalación (4 pasos)**:
    * **Paso 1:** Conceder permiso de acceso a todos los archivos.

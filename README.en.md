@@ -34,6 +34,9 @@
 * **[ps3libraries](https://github.com/ps3dev/ps3libraries):** reference libraries from the PS3 homebrew ecosystem.
 * **[minimp3](https://github.com/lieff/minimp3) & zlib:** MP3 audio decoding and native EdgeZlib decompression.
 
+### Honorable Mention
+* **[TraduSquare](https://tradusquare.es/proyectos/drakengard-3/) & Traducciones Vacuno:** special credit for their Spanish fan translation of *Drakengard 3* (main story, menus, DLC chapters, and subtitled cinematics), supported optionally through `/sdcard/Drakengard3/mods/`.
+
 ---
 
 ## Screenshots
@@ -88,6 +91,10 @@ Place game assets directly inside internal storage without unpacking:
 ├── cache/                                                   ← Auto-generated (EBOOT_101.ELF, SPIR-V, PSO)
 └── gamedata/                                                ← Auto-generated (Save data)
 ```
+
+### Spanish Translation (Optional — TraduSquare / Traducciones Vacuno)
+* Download the fan translation packages from **[TraduSquare · Drakengard 3](https://tradusquare.es/proyectos/drakengard-3/)**.
+* Place the `.pkg` translation files (and `MOVIES.ZIP` if included) inside `/sdcard/Drakengard3/mods/`, or import them from the launcher's **Mods** tab / setup wizard without modifying the base ISO.
 
 ---
 
