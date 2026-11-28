@@ -52,6 +52,7 @@ public class Dod3Activity extends SDLActivity {
     private TextView mFpsView;
     private FrameLayout mExitOverlay;
     private Object mBackCallback;
+    private Object mPerfHintSession;
     private long mLastBackToggleMs = 0L;
     private boolean mExitingToLauncher = false;
     private Handler mHudHandler;
@@ -74,6 +75,7 @@ public class Dod3Activity extends SDLActivity {
     private final Runnable mRehideRunnable = () -> {
         hideSystemUI();
         bringOverlaysToFront();
+        initPerformanceHintSession();
     };
 
     private static native long nativeGetPerfStats();
@@ -147,6 +149,7 @@ public class Dod3Activity extends SDLActivity {
             mBackCallback = cb;
         }
         bringOverlaysToFront();
+        initPerformanceHintSession();
     }
 
     private void applyPadPrefsFromIntent(Intent src) {
@@ -499,6 +502,7 @@ public class Dod3Activity extends SDLActivity {
             mFpsView.setVisibility(View.GONE);
         }
         bringOverlaysToFront();
+        initPerformanceHintSession();
     }
 
     @Override
@@ -546,7 +550,29 @@ public class Dod3Activity extends SDLActivity {
             } catch (Throwable ignored) {}
             mBackCallback = null;
         }
+        closePerformanceHintSession();
         super.onDestroy();
+    }
+
+    private void initPerformanceHintSession() {
+        if (Build.VERSION.SDK_INT < 31 || mPerfHintSession != null) return;
+        try {
+            android.os.PerformanceHintManager phm = getSystemService(android.os.PerformanceHintManager.class);
+            if (phm != null) {
+                mPerfHintSession = phm.createHintSession(
+                        new int[]{ android.os.Process.myTid() },
+                        16_666_666L);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void closePerformanceHintSession() {
+        if (Build.VERSION.SDK_INT >= 31 && mPerfHintSession != null) {
+            try {
+                ((android.os.PerformanceHintManager.Session) mPerfHintSession).close();
+            } catch (Throwable ignored) {}
+            mPerfHintSession = null;
+        }
     }
 
     @Override
@@ -579,9 +605,7 @@ public class Dod3Activity extends SDLActivity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            int src = event.getSource();
-            boolean fromPad = (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-                    || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+            boolean fromPad = GamepadUtils.isRealGamepadEvent(event);
             if (fromPad) {
                 // Xbox One/Series BT View button arrives as KEYCODE_BACK on Android;
                 // translate it to SELECT so pressing View does not exit the game.
@@ -625,6 +649,7 @@ public class Dod3Activity extends SDLActivity {
         if (mPadView != null) mPadView.resetTouches();
         hideSystemUI();
         bringOverlaysToFront();
+        initPerformanceHintSession();
     }
 
     private void ensureExitOverlayCreated() {
@@ -720,32 +745,7 @@ public class Dod3Activity extends SDLActivity {
     }
 
     private String detectConnectedPadStyle() {
-        for (int id : InputDevice.getDeviceIds()) {
-            if (id < 0) continue;
-            InputDevice dev = InputDevice.getDevice(id);
-            if (dev == null) continue;
-            int src = dev.getSources();
-            boolean isPad = (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-                    || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
-            if (!isPad) continue;
-            String name = dev.getName() != null ? dev.getName() : "";
-            if (name.equals("DOD3 Virtual Pad")) continue;
-            int vid = dev.getVendorId();
-            int pid = dev.getProductId();
-            String lower = name.toLowerCase();
-            if (vid == 0x045E || lower.contains("xbox") || lower.contains("x-box") || lower.contains("xinput")) {
-                return "xbox";
-            }
-            if (vid == 0x054C) {
-                if (pid == 0x0CE6 || pid == 0x0DF2) return "ps5";
-                if (pid == 0x05C4 || pid == 0x09CC) return "ps4";
-                return "ps3";
-            }
-            if (vid == 0x057E || lower.contains("nintendo") || lower.contains("pro controller")) {
-                return "switch";
-            }
-        }
-        return "ps3";
+        return GamepadUtils.detectConnectedPadFamily();
     }
 
     private void installInsetsRehideListener() {

@@ -60,6 +60,7 @@
 #include <unistd.h>
 #ifdef __ANDROID__
 #include <jni.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #endif
 #define _stricmp strcasecmp
@@ -1636,7 +1637,12 @@ static VkPipeline eng_build_pso(EngPipeline* p, int cls, VkShaderModule fs)
     gi.pRasterizationState = &rz; gi.pMultisampleState = &ms; gi.pDepthStencilState = &ds;
     gi.pColorBlendState = &cb; gi.pDynamicState = &dy; gi.layout = s_pl;
     VkPipeline pso = VK_NULL_HANDLE;
-    const VkResult r = vkCreateGraphicsPipelines(s_dev, s_pso_cache, 1, &gi, NULL, &pso);
+    static int no_pso_cache = -1;
+    if (no_pso_cache < 0) {
+        const char* e = getenv("RSX_VK_NO_PSO_CACHE");
+        no_pso_cache = (e && e[0] == '1') ? 1 : 0;
+    }
+    const VkResult r = vkCreateGraphicsPipelines(s_dev, no_pso_cache ? VK_NULL_HANDLE : s_pso_cache, 1, &gi, NULL, &pso);
     if (r != VK_SUCCESS) {
         static int n = 0;
         if (n < 16 && ++n) fprintf(stderr, "[rsx engine/vulkan] pipeline failed: %d\n", (int)r);

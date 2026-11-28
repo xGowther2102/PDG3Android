@@ -406,7 +406,11 @@ int wanted_set()
     case PAD_XBOX:
     case PAD_OTHER: return kXbox;   /* what a pad of no known family is laid out as */
     default:   /* nothing plugged in, or the keyboard touched last: the keys */
+#ifdef __ANDROID__
+        return kOriginal;
+#else
         return dod3_kbm_present() ? kKeyboard : kOriginal;
+#endif
     }
 }
 

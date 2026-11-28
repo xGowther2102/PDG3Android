@@ -8,7 +8,7 @@
   <img src="assets/pdg3android_logo_white_rounded.png" alt="PDG3Android Logo" width="520" />
 </p>
 
-> **Project Status:** **Active Development (`v0.6.1`)** — Playable and actively maintained with Vulkan renderer and Android launcher optimizations.  
+> **Project Status:** **Active Development (`v0.6.2`)** — Playable and actively maintained with Vulkan renderer and Android launcher optimizations.  
 > **Android Port Creator:** `xGowther2102` · Built upon static recompilation work from [dod3-recomp](https://github.com/soyjxck/dod3-recomp) and [ps3recomp](https://github.com/soyjxck/ps3recomp).
 
 **PDG3Android** is a native Android port of **Drakengard 3 (BLUS31197)** built with **PPU/SPU static recompilation to ARM64** rather than traditional emulation. Original PlayStation 3 executable functions are statically lifted to 64-bit native C++ running on a custom HLE runtime, **native Vulkan**, **SPIR-V**, MP3/PCM audio, and a direct virtual filesystem reading `.iso`, `.pkg`, and mod archives without unpacking.
@@ -73,7 +73,7 @@
 
 ### Tested Devices
 * **POCO F3** — Tested and verified.
-* **POCO F8 Pro** — Upcoming testing (validation pending).
+* **POCO F8 Pro** — Tested and verified.
 
 ---
 
@@ -95,6 +95,16 @@ Place game assets directly inside internal storage without unpacking:
 ### Spanish Translation (Optional — TraduSquare / Traducciones Vacuno)
 * Download the fan translation packages from **[TraduSquare · Drakengard 3](https://tradusquare.es/proyectos/drakengard-3/)**.
 * Place the `.pkg` translation files (and `MOVIES.ZIP` if included) inside `/sdcard/Drakengard3/mods/`, or import them from the launcher's **Mods** tab / setup wizard without modifying the base ISO.
+
+---
+
+## Version History
+
+* **`v0.6.2` (Current):**
+  * Stability and compatibility fixes for Android 17 and Adreno 830 (`POCO F8 Pro`), plus responsive crash report dialogs.
+  * Built-in GitHub Releases updater with startup alert, changelog notes (**What's New**), and direct in-app APK download/install.
+  * Virtual/phantom controller filtering (`uinput-xiaomi`, etc.), controller button glyphs on Android, and touch cutscene-skip prevention.
+  * Combat performance upgrades: async shader worker threads, async Vulkan pipeline cache writes, `MAILBOX` presentation, ADPF hints, and particle/explosion scaling.
 
 ---
 

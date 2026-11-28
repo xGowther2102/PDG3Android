@@ -30,6 +30,7 @@ import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -45,6 +46,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -99,10 +101,13 @@ public class LauncherActivity extends Activity {
     private IniStore mIni;
     private SharedPreferences mPrefs;
     private final ExecutorService mBgExec = Executors.newSingleThreadExecutor();
+    private final ExecutorService mNetExec = Executors.newSingleThreadExecutor();
     private volatile ArchiveScan mCachedScan;
     private volatile boolean mScanInFlight = false;
     private volatile Bitmap mBackdropBmp;
     private volatile boolean mBackdropLoading = false;
+    private volatile UpdateChecker.Result mLastUpdateResult;
+    private volatile boolean mUpdateChecking = false;
 
     private LinearLayout mContentContainer;
     private ImageView mBackdrop;
@@ -123,15 +128,18 @@ public class LauncherActivity extends Activity {
     private int mSetupStep = 0;
     private boolean mSetupManualOpen = false;
     private boolean mCrashDialogShowing = false;
+    private volatile boolean mUpdateDialogShowing = false;
+    private volatile boolean mUpdateDownloadCancelled = false;
+    private volatile File mPendingInstallApk = null;
 
     private static class GfxPreset {
         final String id, label, desc;
-        final String scale, fps, vsync, aa, aniso, shadows, drawDist, treeLod;
+        final String scale, fps, vsync, aa, aniso, shadows, drawDist, treeLod, particles;
         final boolean postfx, dof, motionBlur, distortion;
 
         GfxPreset(String id, String label, String desc,
                   String scale, String fps, String vsync, String aa, String aniso,
-                  String shadows, String drawDist, String treeLod,
+                  String shadows, String drawDist, String treeLod, String particles,
                   boolean postfx, boolean dof, boolean motionBlur, boolean distortion) {
             this.id = id;
             this.label = label;
@@ -144,6 +152,7 @@ public class LauncherActivity extends Activity {
             this.shadows = shadows;
             this.drawDist = drawDist;
             this.treeLod = treeLod;
+            this.particles = particles;
             this.postfx = postfx;
             this.dof = dof;
             this.motionBlur = motionBlur;
@@ -153,20 +162,20 @@ public class LauncherActivity extends Activity {
 
     private static final GfxPreset[] GFX_PRESETS = new GfxPreset[] {
         new GfxPreset("recommended", "Recomendado",
-                "540p · 60 FPS · Sin AA · AF 4x · Sombras Baja · Efectos y Distorsión Off (Equilibrio estable en combates)",
-                "0.75", "60", "1", "", "4", "low", "", "", false, false, false, false),
+                "720p nativo · 60 FPS · VSync Off · Sin AA · AF 4x · Sombras Baja · Partículas Media · Efectos Off",
+                "1", "60", "0", "", "4", "low", "", "", "medium", false, false, false, false),
         new GfxPreset("low", "Baja",
-                "540p · 30 FPS · Sin AA · AF 1x · Sombras Off · Efectos y Distorsión Off (Máxima fluidez)",
-                "0.75", "", "1", "", "1", "off", "", "", false, false, false, false),
+                "540p · 60 FPS · VSync Off · Sin AA · AF 1x · Sombras Off · Partículas Baja (Máxima fluidez en combate)",
+                "0.75", "60", "0", "", "1", "off", "", "", "low", false, false, false, false),
         new GfxPreset("medium", "Media",
-                "720p · 30 FPS · Sin AA · AF 4x · Sombras Original · Post-FX On · DoF/Distorsión Off",
-                "1", "", "1", "", "4", "", "", "", true, false, false, false),
+                "720p · 60 FPS · VSync Off · Sin AA · AF 4x · Sombras Original · Partículas Media · Post-FX On",
+                "1", "60", "0", "", "4", "", "", "", "medium", true, false, false, false),
         new GfxPreset("high", "Alta",
-                "900p · 60 FPS · FXAA · AF 8x · Sombras Alto · Distancia 2x · Distorsión On",
-                "1.25", "60", "1", "fxaa", "8", "high", "2", "2", true, true, false, true),
+                "900p · 60 FPS · VSync Off · FXAA · AF 8x · Sombras Alto · Distancia 2x · Partículas Original",
+                "1.25", "60", "0", "fxaa", "8", "high", "2", "2", "", true, true, false, true),
         new GfxPreset("ultra", "Muy Alta",
-                "1080p · 60 FPS · FXAA · AF 16x · Sombras Ultra · Distancia 3x · Todos los efectos On",
-                "1.5", "60", "1", "fxaa", "16", "ultra", "3", "3", true, true, true, true),
+                "1080p · 60 FPS · VSync Off · FXAA · AF 16x · Sombras Ultra · Distancia 3x · Partículas Original · Efectos On",
+                "1.5", "60", "0", "fxaa", "16", "ultra", "3", "3", "", true, true, true, true),
     };
 
     private static class PkgMeta {
@@ -452,6 +461,9 @@ public class LauncherActivity extends Activity {
         if (needsMandatorySetup(getScan())) {
             showSetupGuide(false);
         }
+        if (mPrefs.getBoolean("auto_update_check", true)) {
+            checkUpdatesAsync(false);
+        }
     }
 
     @Override
@@ -473,11 +485,20 @@ public class LauncherActivity extends Activity {
             }
         });
         checkPendingCrashAsync();
+        if (mPendingInstallApk != null) {
+            File apkToInstall = mPendingInstallApk;
+            mPendingInstallApk = null;
+            if (apkToInstall.isFile() && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                    || getPackageManager().canRequestPackageInstalls())) {
+                launchApkInstaller(apkToInstall);
+            }
+        }
     }
 
     @Override
     protected void onDestroy() {
         mBgExec.shutdownNow();
+        mNetExec.shutdownNow();
         super.onDestroy();
     }
 
@@ -1392,6 +1413,7 @@ public class LauncherActivity extends Activity {
         String shadows    = mIni.get("DOD3_SHADOWS", "").toLowerCase();
         String drawDist   = mIni.get("DOD3_DRAW_DISTANCE", "");
         String treeLod    = mIni.get("DOD3_TREE_LOD", "");
+        String particles  = mIni.get("DOD3_PARTICLES", "").toLowerCase();
         boolean postfx    = mIni.getBool("DOD3_POSTFX", true);
         boolean dof       = mIni.getBool("DOD3_DOF", true);
         boolean blur      = mIni.getBool("DOD3_MOTION_BLUR", true);
@@ -1406,6 +1428,7 @@ public class LauncherActivity extends Activity {
                     && p.shadows.equals(shadows)
                     && p.drawDist.equals(drawDist)
                     && p.treeLod.equals(treeLod)
+                    && p.particles.equals(particles)
                     && p.postfx == postfx
                     && p.dof == dof
                     && p.motionBlur == blur
@@ -1450,6 +1473,7 @@ public class LauncherActivity extends Activity {
         mIni.setInMemory("DOD3_SHADOWS", target.shadows);
         mIni.setInMemory("DOD3_DRAW_DISTANCE", target.drawDist);
         mIni.setInMemory("DOD3_TREE_LOD", target.treeLod);
+        mIni.setInMemory("DOD3_PARTICLES", target.particles);
         mIni.setInMemory("DOD3_POSTFX", target.postfx ? "" : "0");
         mIni.setInMemory("DOD3_DOF", target.dof ? "" : "0");
         mIni.setInMemory("DOD3_MOTION_BLUR", target.motionBlur ? "" : "0");
@@ -1602,6 +1626,12 @@ public class LauncherActivity extends Activity {
                 mIni.getBool("DOD3_DISTORTION", true),
                 on -> { mIni.set("DOD3_DISTORTION", on ? "" : "0"); refreshPresetBanner(); });
 
+        addChoiceRow("Partículas, fuego y explosiones", "Reduce complejidad de fuego, humo, blur radial y explosiones en combate",
+                new String[] { "Baja", "Media", "Original" },
+                new String[] { "low", "medium", "" },
+                mIni.get("DOD3_PARTICLES", "").toLowerCase(),
+                val -> { mIni.set("DOD3_PARTICLES", val); refreshPresetBanner(); });
+
         addChoiceRow("Sangre en pantalla", "Salpicaduras de sangre durante el combate",
                 new String[] { "Original", "Solo borde", "Off" },
                 new String[] { "", "border", "0" },
@@ -1705,53 +1735,11 @@ public class LauncherActivity extends Activity {
 
     // ==================== TAB 2: SYSTEM & CONTROLS ====================
     private String detectConnectedPadFamily() {
-        for (int id : InputDevice.getDeviceIds()) {
-            if (id < 0) continue;
-            InputDevice dev = InputDevice.getDevice(id);
-            if (dev == null) continue;
-            int src = dev.getSources();
-            boolean isPad = (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-                    || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
-            if (!isPad) continue;
-            String name = dev.getName() != null ? dev.getName() : "";
-            if (name.equals("DOD3 Virtual Pad")) continue;
-            int vid = dev.getVendorId();
-            int pid = dev.getProductId();
-            String lower = name.toLowerCase();
-            if (vid == 0x045E || lower.contains("xbox") || lower.contains("x-box") || lower.contains("xinput")) {
-                return "xbox";
-            }
-            if (vid == 0x054C) {
-                if (pid == 0x0CE6 || pid == 0x0DF2) return "ps5";
-                if (pid == 0x05C4 || pid == 0x09CC) return "ps4";
-                return "ps3";
-            }
-            if (vid == 0x057E || lower.contains("nintendo") || lower.contains("pro controller")) {
-                return "switch";
-            }
-        }
-        return "ps3";
+        return GamepadUtils.detectConnectedPadFamily();
     }
 
     private List<String> listConnectedControllers() {
-        List<String> out = new ArrayList<>();
-        for (int id : InputDevice.getDeviceIds()) {
-            if (id < 0) continue;
-            InputDevice dev = InputDevice.getDevice(id);
-            if (dev == null) continue;
-            int src = dev.getSources();
-            boolean isPad = (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-                    || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
-            if (!isPad) continue;
-            String name = dev.getName() != null ? dev.getName() : "Mando genérico";
-            if (name.equals("DOD3 Virtual Pad")) continue;
-            String vidPid = String.format("%04x:%04x", dev.getVendorId(), dev.getProductId());
-            String lower = name.toLowerCase();
-            String tag = (dev.getVendorId() == 0x045E || lower.contains("xbox"))
-                    ? " · Mapeo Xbox One/Series activo" : "";
-            out.add(name + " [" + vidPid + "]" + tag);
-        }
-        return out;
+        return GamepadUtils.listConnectedControllers();
     }
 
     private String resolveControllerPreviewStyle() {
@@ -2498,7 +2486,149 @@ public class LauncherActivity extends Activity {
         zeroCard.addView(artWrap, new LinearLayout.LayoutParams(dp(130), dp(188)));
         mContentContainer.addView(zeroCard);
 
-        // 2. General architecture card
+        // 2b. GitHub Releases update checker card (below Zero)
+        LinearLayout updCard = makeRowCard();
+        TextView ut = new TextView(this);
+        ut.setText("Actualizaciones (GitHub Releases)");
+        ut.setTextColor(COL_TEXT);
+        ut.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        ut.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+        updCard.addView(ut);
+
+        TextView uVer = new TextView(this);
+        uVer.setText("Versión instalada: v" + ver);
+        uVer.setTextColor(COL_MUTED);
+        uVer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        uVer.setPadding(0, dp(2), 0, dp(4));
+        updCard.addView(uVer);
+
+        TextView uStatus = new TextView(this);
+        if (mUpdateChecking) {
+            uStatus.setText("Comprobando última versión en GitHub...");
+            uStatus.setTextColor(COL_MUTED);
+        } else if (mLastUpdateResult != null && mLastUpdateResult.ok) {
+            if (mLastUpdateResult.updateAvailable) {
+                uStatus.setText("✓ Nueva versión disponible: " + mLastUpdateResult.latestTag
+                        + " (" + mLastUpdateResult.releaseTitle + ")");
+                uStatus.setTextColor(COL_OK);
+            } else {
+                uStatus.setText("✓ Aplicación al día (última en GitHub: " + mLastUpdateResult.latestTag + ")");
+                uStatus.setTextColor(COL_OK);
+            }
+        } else if (mLastUpdateResult != null && !mLastUpdateResult.errorMsg.isEmpty()) {
+            uStatus.setText("• " + mLastUpdateResult.errorMsg);
+            uStatus.setTextColor(COL_WARN);
+        } else {
+            uStatus.setText("Comprobar si existe una versión más reciente en GitHub Releases.");
+            uStatus.setTextColor(COL_MUTED);
+        }
+        uStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        uStatus.setPadding(0, 0, 0, dp(8));
+        updCard.addView(uStatus);
+
+        if (mLastUpdateResult != null && mLastUpdateResult.ok && mLastUpdateResult.updateAvailable) {
+            String rawNotes = mLastUpdateResult.notes != null ? mLastUpdateResult.notes.trim() : "";
+            if (!rawNotes.isEmpty()) {
+                String preview = rawNotes.replaceAll("\\s+", " ");
+                TextView uNotesPreview = new TextView(this);
+                uNotesPreview.setText("Qué hay de nuevo: " + preview);
+                uNotesPreview.setTextColor(COL_TEXT);
+                uNotesPreview.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                uNotesPreview.setMaxLines(2);
+                uNotesPreview.setEllipsize(TextUtils.TruncateAt.END);
+                uNotesPreview.setPadding(0, 0, 0, dp(8));
+                updCard.addView(uNotesPreview);
+            }
+        }
+
+        LinearLayout autoRow = new LinearLayout(this);
+        autoRow.setOrientation(LinearLayout.HORIZONTAL);
+        autoRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams arLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        arLp.bottomMargin = dp(10);
+
+        TextView autoLbl = new TextView(this);
+        autoLbl.setText("Buscar actualizaciones automáticamente al iniciar");
+        autoLbl.setTextColor(COL_TEXT);
+        autoLbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        autoRow.addView(autoLbl, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        boolean autoOn = mPrefs.getBoolean("auto_update_check", true);
+        final TextView bAutoOff = new TextView(this);
+        final TextView bAutoOn  = new TextView(this);
+        configureTogglePill(bAutoOff, "Off", !autoOn);
+        configureTogglePill(bAutoOn, "On", autoOn);
+        LinearLayout.LayoutParams aoLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        aoLp.rightMargin = dp(6);
+        bAutoOff.setOnClickListener(v -> {
+            stylePill(bAutoOff, true);
+            stylePill(bAutoOn, false);
+            mPrefs.edit().putBoolean("auto_update_check", false).apply();
+        });
+        bAutoOn.setOnClickListener(v -> {
+            stylePill(bAutoOff, false);
+            stylePill(bAutoOn, true);
+            mPrefs.edit().putBoolean("auto_update_check", true).apply();
+        });
+        autoRow.addView(bAutoOff, aoLp);
+        autoRow.addView(bAutoOn);
+        updCard.addView(autoRow, arLp);
+
+        LinearLayout updRow1 = new LinearLayout(this);
+        updRow1.setOrientation(LinearLayout.HORIZONTAL);
+        updRow1.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams r1Lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        r1Lp.bottomMargin = dp(8);
+
+        TextView btnCheckUpd = makeActionButton(mUpdateChecking ? "Comprobando..." : "Buscar actualización");
+        btnCheckUpd.setSingleLine(true);
+        ((LinearLayout.LayoutParams) btnCheckUpd.getLayoutParams()).rightMargin = dp(8);
+        btnCheckUpd.setOnClickListener(v -> checkUpdatesAsync(true));
+        updRow1.addView(btnCheckUpd);
+
+        if (mLastUpdateResult != null && mLastUpdateResult.ok && mLastUpdateResult.updateAvailable) {
+            final UpdateChecker.Result updRes = mLastUpdateResult;
+            TextView btnDl = makeAccentButton(updRes.hasApkAsset
+                    ? "Descargar e instalar"
+                    : "Descargar " + updRes.latestTag);
+            btnDl.setSingleLine(true);
+            btnDl.setOnClickListener(v -> startApkDownloadAndInstall(updRes));
+            updRow1.addView(btnDl);
+        }
+        updCard.addView(updRow1, r1Lp);
+
+        LinearLayout updRow2 = new LinearLayout(this);
+        updRow2.setOrientation(LinearLayout.HORIZONTAL);
+        updRow2.setGravity(Gravity.CENTER_VERTICAL);
+
+        if (mLastUpdateResult != null && mLastUpdateResult.ok) {
+            final UpdateChecker.Result notesRes = mLastUpdateResult;
+            TextView btnNotes = makeActionButton("Qué hay de nuevo");
+            btnNotes.setSingleLine(true);
+            ((LinearLayout.LayoutParams) btnNotes.getLayoutParams()).rightMargin = dp(8);
+            btnNotes.setOnClickListener(v -> showReleaseNotesDialog(notesRes));
+            updRow2.addView(btnNotes);
+        }
+
+        TextView btnRel = makeActionButton("Abrir Releases");
+        btnRel.setSingleLine(true);
+        btnRel.setOnClickListener(v -> {
+            String page = (mLastUpdateResult != null && !mLastUpdateResult.pageUrl.isEmpty())
+                    ? mLastUpdateResult.pageUrl : UpdateChecker.RELEASES_URL;
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(page)));
+            } catch (Exception e) {
+                Toast.makeText(this, page, Toast.LENGTH_LONG).show();
+            }
+        });
+        updRow2.addView(btnRel);
+        updCard.addView(updRow2);
+        mContentContainer.addView(updCard);
+
+        // 3. General architecture card
         LinearLayout genCard = makeRowCard();
         TextView gt = new TextView(this);
         gt.setText("Arquitectura y componentes generales");
@@ -2954,6 +3084,386 @@ public class LauncherActivity extends Activity {
         return String.format("%d KB", Math.max(1L, b / 1024L));
     }
 
+    private void checkUpdatesAsync(final boolean manual) {
+        if (mUpdateChecking) return;
+        mUpdateChecking = true;
+        if (manual && mActiveTab == 6) selectTab(6);
+        final String curVer = getAppVersion();
+        mNetExec.execute(() -> {
+            UpdateChecker.Result res = UpdateChecker.checkLatest(curVer);
+            mLastUpdateResult = res;
+            mUpdateChecking = false;
+            if (res.ok) {
+                mPrefs.edit().putLong("last_update_check_ms", System.currentTimeMillis()).apply();
+            }
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (mActiveTab == 6) selectTab(6);
+                if (res.ok && res.updateAvailable) {
+                    if (!mUpdateDialogShowing && (manual || !mCrashDialogShowing)) {
+                        showUpdateAvailableDialog(res);
+                    }
+                } else if (manual && res.ok) {
+                    Toast.makeText(this,
+                            "La versión v" + curVer + " está al día (GitHub: " + res.latestTag + ").",
+                            Toast.LENGTH_SHORT).show();
+                } else if (manual && !res.errorMsg.isEmpty()) {
+                    Toast.makeText(this, res.errorMsg, Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void showUpdateAvailableDialog(final UpdateChecker.Result res) {
+        if (mUpdateDialogShowing || res == null || !res.updateAvailable) return;
+        mUpdateDialogShowing = true;
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(14), dp(16), dp(12));
+        box.setBackground(makeRounded(Color.rgb(18, 18, 25), dp(12), COL_ACCENT2));
+
+        TextView title = new TextView(this);
+        title.setText("Nueva versión disponible");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        title.setTypeface(Typeface.SERIF, Typeface.BOLD);
+        box.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText("Instalada: v" + getAppVersion() + "  →  Disponible: " + res.latestTag);
+        sub.setTextColor(COL_TEXT);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        sub.setPadding(0, dp(4), 0, dp(6));
+        box.addView(sub);
+
+        String notes = res.notes != null ? res.notes.trim() : "";
+        if (notes.length() > 4000) {
+            notes = notes.substring(0, 4000).trim() + "...";
+        }
+        if (notes.isEmpty()) {
+            notes = "Sin notas de versión publicadas en GitHub Releases.";
+        }
+
+        TextView notesHdr = new TextView(this);
+        notesHdr.setText("Qué hay de nuevo:");
+        notesHdr.setTextColor(COL_TEXT);
+        notesHdr.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        notesHdr.setTypeface(Typeface.SANS_SERIF, Typeface.BOLD);
+        notesHdr.setPadding(0, 0, 0, dp(4));
+        box.addView(notesHdr);
+
+        ScrollView sc = new ScrollView(this);
+        sc.setBackground(makeRounded(Color.rgb(10, 10, 14), dp(8), COL_BORDER));
+        sc.setPadding(dp(10), dp(8), dp(10), dp(8));
+
+        TextView notesTv = new TextView(this);
+        notesTv.setText(notes);
+        notesTv.setTextColor(Color.rgb(225, 223, 232));
+        notesTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        notesTv.setTextIsSelectable(true);
+        sc.addView(notesTv, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        box.addView(sc, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        TextView hint = new TextView(this);
+        hint.setText("Si se cancela, la actualización seguirá disponible en la pestaña Información.");
+        hint.setTextColor(COL_MUTED);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        hint.setPadding(0, dp(6), 0, dp(10));
+        box.addView(hint);
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.END);
+
+        TextView btnLater = makeActionButton("Más tarde");
+        btnLater.setSingleLine(true);
+        ((LinearLayout.LayoutParams) btnLater.getLayoutParams()).rightMargin = dp(8);
+        btns.addView(btnLater);
+
+        TextView btnInstall = makeAccentButton(res.hasApkAsset ? "Descargar e instalar" : "Abrir Releases");
+        btnInstall.setSingleLine(true);
+        btns.addView(btnInstall);
+        box.addView(btns);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(box)
+                .create();
+        btnLater.setOnClickListener(v -> dialog.dismiss());
+        btnInstall.setOnClickListener(v -> {
+            dialog.dismiss();
+            startApkDownloadAndInstall(res);
+        });
+        dialog.setOnDismissListener(d -> mUpdateDialogShowing = false);
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int dlgW = Math.min(dp(540), (int) (dm.widthPixels * 0.90f));
+            int dlgH = Math.min(dp(340), (int) (dm.heightPixels * 0.86f));
+            dialog.getWindow().setLayout(dlgW, dlgH);
+        }
+    }
+
+    private void showReleaseNotesDialog(final UpdateChecker.Result res) {
+        if (res == null) return;
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(14), dp(16), dp(12));
+        box.setBackground(makeRounded(Color.rgb(18, 18, 25), dp(12), COL_ACCENT2));
+
+        TextView title = new TextView(this);
+        title.setText("Qué hay de nuevo · " + res.latestTag);
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        title.setTypeface(Typeface.SERIF, Typeface.BOLD);
+        box.addView(title);
+
+        if (res.releaseTitle != null && !res.releaseTitle.isEmpty() && !res.releaseTitle.equals(res.latestTag)) {
+            TextView sub = new TextView(this);
+            sub.setText(res.releaseTitle);
+            sub.setTextColor(COL_MUTED);
+            sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            sub.setPadding(0, dp(3), 0, dp(8));
+            box.addView(sub);
+        } else {
+            TextView spacer = new TextView(this);
+            spacer.setText("Notas de lanzamiento publicadas en GitHub Releases");
+            spacer.setTextColor(COL_MUTED);
+            spacer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            spacer.setPadding(0, dp(3), 0, dp(8));
+            box.addView(spacer);
+        }
+
+        String notes = res.notes != null ? res.notes.trim() : "";
+        if (notes.length() > 4000) {
+            notes = notes.substring(0, 4000).trim() + "...";
+        }
+        if (notes.isEmpty()) {
+            notes = "Sin notas de versión publicadas en GitHub Releases.";
+        }
+
+        ScrollView sc = new ScrollView(this);
+        sc.setBackground(makeRounded(Color.rgb(10, 10, 14), dp(8), COL_BORDER));
+        sc.setPadding(dp(10), dp(8), dp(10), dp(8));
+
+        TextView notesTv = new TextView(this);
+        notesTv.setText(notes);
+        notesTv.setTextColor(Color.rgb(225, 223, 232));
+        notesTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        notesTv.setTextIsSelectable(true);
+        sc.addView(notesTv, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        box.addView(sc, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.END);
+        LinearLayout.LayoutParams btnBarLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        btnBarLp.topMargin = dp(10);
+
+        TextView btnClose = makeActionButton("Cerrar");
+        btnClose.setSingleLine(true);
+        btns.addView(btnClose);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(box)
+                .create();
+        btnClose.setOnClickListener(v -> dialog.dismiss());
+
+        if (res.updateAvailable) {
+            ((LinearLayout.LayoutParams) btnClose.getLayoutParams()).rightMargin = dp(8);
+            TextView btnInstall = makeAccentButton(res.hasApkAsset ? "Descargar e instalar" : "Abrir Releases");
+            btnInstall.setSingleLine(true);
+            btnInstall.setOnClickListener(v -> {
+                dialog.dismiss();
+                startApkDownloadAndInstall(res);
+            });
+            btns.addView(btnInstall);
+        }
+
+        box.addView(btns, btnBarLp);
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int dlgW = Math.min(dp(540), (int) (dm.widthPixels * 0.90f));
+            int dlgH = Math.min(dp(340), (int) (dm.heightPixels * 0.86f));
+            dialog.getWindow().setLayout(dlgW, dlgH);
+        }
+    }
+
+    private void startApkDownloadAndInstall(final UpdateChecker.Result res) {
+        if (res == null) return;
+        if (!res.hasApkAsset || res.downloadUrl.isEmpty()) {
+            String page = (res.pageUrl != null && !res.pageUrl.isEmpty()) ? res.pageUrl : UpdateChecker.RELEASES_URL;
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(page)));
+            } catch (Exception e) {
+                Toast.makeText(this, page, Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
+
+        String rawName = (res.apkFileName != null && !res.apkFileName.trim().isEmpty())
+                ? res.apkFileName.trim()
+                : ("PDG3Android-" + res.latestTag + ".apk");
+        String safeName = rawName.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (!safeName.toLowerCase(Locale.ROOT).endsWith(".apk")) {
+            safeName = safeName + ".apk";
+        }
+
+        mUpdateDownloadCancelled = false;
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(14), dp(16), dp(12));
+        box.setBackground(makeRounded(Color.rgb(18, 18, 25), dp(12), COL_ACCENT2));
+
+        TextView title = new TextView(this);
+        title.setText("Descargando actualización");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f);
+        title.setTypeface(Typeface.SERIF, Typeface.BOLD);
+        box.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText(res.latestTag + " · " + safeName);
+        sub.setTextColor(COL_MUTED);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        sub.setPadding(0, dp(3), 0, dp(10));
+        box.addView(sub);
+
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setIndeterminate(true);
+        bar.setProgressTintList(ColorStateList.valueOf(COL_ACCENT2));
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        barLp.bottomMargin = dp(8);
+        box.addView(bar, barLp);
+
+        TextView progressTv = new TextView(this);
+        progressTv.setText("Conectando con GitHub...");
+        progressTv.setTextColor(COL_TEXT);
+        progressTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        progressTv.setPadding(0, 0, 0, dp(10));
+        box.addView(progressTv);
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.END);
+        TextView btnCancel = makeActionButton("Cancelar");
+        btnCancel.setSingleLine(true);
+        btns.addView(btnCancel);
+        box.addView(btns);
+
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setView(box)
+                .setCancelable(false)
+                .create();
+        dlg.setCanceledOnTouchOutside(false);
+        btnCancel.setOnClickListener(v -> {
+            mUpdateDownloadCancelled = true;
+            btnCancel.setEnabled(false);
+            progressTv.setText("Cancelando descarga...");
+        });
+        dlg.show();
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int dlgW = Math.min(dp(460), (int) (dm.widthPixels * 0.84f));
+            dlg.getWindow().setLayout(dlgW, WindowManager.LayoutParams.WRAP_CONTENT);
+        }
+
+        final File destFile = new File(ApkFileProvider.getUpdatesDir(this), safeName);
+        mNetExec.execute(() -> {
+            try {
+                File downloaded = UpdateChecker.downloadApk(res.downloadUrl, destFile, new UpdateChecker.DownloadListener() {
+                    @Override
+                    public void onProgress(long downloadedBytes, long totalBytes) {
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed() || !dlg.isShowing()) return;
+                            double dlMb = downloadedBytes / (1024.0 * 1024.0);
+                            if (totalBytes > 0L) {
+                                int pct = (int) Math.min(100L, (downloadedBytes * 100L) / totalBytes);
+                                double totMb = totalBytes / (1024.0 * 1024.0);
+                                bar.setIndeterminate(false);
+                                bar.setProgress(pct);
+                                progressTv.setText(String.format(Locale.US, "%.1f MB / %.1f MB (%d%%)", dlMb, totMb, pct));
+                            } else {
+                                bar.setIndeterminate(true);
+                                progressTv.setText(String.format(Locale.US, "%.1f MB descargados...", dlMb));
+                            }
+                        });
+                    }
+
+                    @Override
+                    public boolean isCancelled() {
+                        return mUpdateDownloadCancelled || isFinishing() || isDestroyed();
+                    }
+                });
+                runOnUiThread(() -> {
+                    if (dlg.isShowing()) dlg.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    if (downloaded == null || mUpdateDownloadCancelled) {
+                        Toast.makeText(this, "Descarga cancelada. Disponible en la pestaña Información.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    installDownloadedApk(downloaded);
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (dlg.isShowing()) dlg.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    String msg = (e.getMessage() != null && !e.getMessage().isEmpty())
+                            ? e.getMessage() : "Error al descargar la actualización.";
+                    Toast.makeText(this, "Error al descargar: " + msg, Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
+    private void installDownloadedApk(File apkFile) {
+        if (apkFile == null || !apkFile.isFile()) {
+            Toast.makeText(this, "Archivo APK no encontrado.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+            mPendingInstallApk = apkFile;
+            Toast.makeText(this,
+                    "Habilitar permiso de instalación para PDG3Android y volver atrás para continuar.",
+                    Toast.LENGTH_LONG).show();
+            try {
+                Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(permIntent);
+            } catch (Exception e) {
+                mPendingInstallApk = null;
+                Toast.makeText(this, "No se pudo abrir ajustes de instalación.", Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
+        launchApkInstaller(apkFile);
+    }
+
+    private void launchApkInstaller(File apkFile) {
+        try {
+            Uri uri = ApkFileProvider.getUriForFile(apkFile);
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(this, "No se pudo iniciar el instalador de Android.", Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void checkPendingCrashAsync() {
         mBgExec.execute(() -> {
             CrashReporter.PendingCrash pending = CrashReporter.checkPendingCrash(this, mBaseDir);
@@ -3003,16 +3513,17 @@ public class LauncherActivity extends Activity {
         sc.addView(logTv, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
         box.addView(sc, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(220)));
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
         LinearLayout btns = new LinearLayout(this);
         btns.setOrientation(LinearLayout.HORIZONTAL);
         btns.setGravity(Gravity.END);
         LinearLayout.LayoutParams btnBarLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        btnBarLp.topMargin = dp(12);
+        btnBarLp.topMargin = dp(10);
 
         TextView btnCopy = makeActionButton("Copiar error");
+        btnCopy.setSingleLine(true);
         ((LinearLayout.LayoutParams) btnCopy.getLayoutParams()).rightMargin = dp(8);
         btnCopy.setOnClickListener(v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -3024,6 +3535,7 @@ public class LauncherActivity extends Activity {
         btns.addView(btnCopy);
 
         TextView btnSave = makeActionButton("Guardar en .txt");
+        btnSave.setSingleLine(true);
         ((LinearLayout.LayoutParams) btnSave.getLayoutParams()).rightMargin = dp(8);
         btnSave.setOnClickListener(v -> mBgExec.execute(() -> {
             File saved = CrashReporter.saveReportToTxt(this, mBaseDir, report, "crash");
@@ -3039,6 +3551,7 @@ public class LauncherActivity extends Activity {
         btns.addView(btnSave);
 
         TextView btnClose = makeAccentButton("Cerrar");
+        btnClose.setSingleLine(true);
         btns.addView(btnClose);
         box.addView(btns, btnBarLp);
 
@@ -3053,7 +3566,10 @@ public class LauncherActivity extends Activity {
         dialog.show();
         if (dialog.getWindow() != null) {
             dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
-            dialog.getWindow().setLayout(dp(520), WindowManager.LayoutParams.WRAP_CONTENT);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int dlgW = Math.min(dp(560), (int) (dm.widthPixels * 0.90f));
+            int dlgH = Math.min(dp(340), (int) (dm.heightPixels * 0.88f));
+            dialog.getWindow().setLayout(dlgW, dlgH);
         }
     }
 

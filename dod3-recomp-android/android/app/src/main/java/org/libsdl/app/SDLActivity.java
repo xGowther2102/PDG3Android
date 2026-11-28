@@ -709,7 +709,8 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
                     // Start up the C app thread and enable sensor input for the first time
                     // FIXME: Why aren't we enabling sensor input at start?
 
-                    mSDLThread = new Thread(new SDLMain(), "SDLThread");
+                    // Use 8 MB stack for SDLThread so glslang & Vulkan QGL shader compilation do not overflow.
+                    mSDLThread = new Thread(null, new SDLMain(), "SDLThread", 8L * 1024L * 1024L);
                     mSurface.enableSensor(Sensor.TYPE_ACCELEROMETER, true);
                     mSDLThread.start();
 

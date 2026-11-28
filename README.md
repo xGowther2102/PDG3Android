@@ -8,7 +8,7 @@
   <img src="assets/pdg3android_logo_white_rounded.png" alt="PDG3Android Logo" width="520" />
 </p>
 
-> **Estado del proyecto:** **En desarrollo activo (`v0.6.1`)** — Funcional y jugable, con mejoras continuas de rendimiento Vulkan y launcher nativo.  
+> **Estado del proyecto:** **En desarrollo activo (`v0.6.2`)** — Funcional y jugable, con mejoras continuas de rendimiento Vulkan y launcher nativo.  
 > **Creador del port Android:** `xGowther2102` · Basado en el trabajo original de recompilación [dod3-recomp](https://github.com/soyjxck/dod3-recomp) y [ps3recomp](https://github.com/soyjxck/ps3recomp).
 
 **PDG3Android** es un port nativo de **Drakengard 3 (BLUS31197)** para Android mediante **recompilación estática PPU/SPU a ARM64** en lugar de emulación tradicional. Las funciones originales del ejecutable de PlayStation 3 se traducen a C++ nativo de 64 bits sobre una implementación propia HLE, **Vulkan nativo**, **SPIR-V**, audio MP3/PCM y sistema de archivos virtual con lectura directa de ISO, `.pkg` y mods sin descomprimir.
@@ -83,14 +83,14 @@
 
 ### Dispositivos probados
 * **POCO F3** — Probado y verificado.
-* **POCO F8 Pro** — Próximo a probar (validación pendiente).
+* **POCO F8 Pro** — Probado y verificado.
 
 ---
 
 ## Cómo instalar y jugar
 
 ### 1. Instalar la aplicación
-* Descargar e instalar el archivo `PDG3Android-v0.6.1-release.apk` desde la sección **[Releases](../../releases/latest)**.
+* Descargar e instalar el archivo `PDG3Android-v0.6.2-release.apk` desde la sección **[Releases](../../releases/latest)**.
 
 ### 2. Preparar los archivos en la ruta exacta
 En el almacenamiento interno del dispositivo (`Almacenamiento interno/Drakengard3/`), ubicar cada archivo en su carpeta dedicada:
@@ -127,7 +127,12 @@ En el almacenamiento interno del dispositivo (`Almacenamiento interno/Drakengard
 
 ## Historial de versiones
 
-* **`v0.6.1` (Actual):**
+* **`v0.6.2` (Actual):**
+  * Compatibilidad y estabilidad en Android 17 y Adreno 830 (`POCO F8 Pro`), junto con diálogos de fallo legibles.
+  * Actualizador integrado vía GitHub Releases con aviso automático, notas de versión (**Qué hay de nuevo**) e instalador directo en la app.
+  * Filtrado de mandos virtuales fantasma (`uinput-xiaomi` y similares), glifos de mando nativos y prevención de saltos accidentales de cinemáticas al tocar pantalla.
+  * Mejoras de rendimiento en combates: compilación asíncrona de shaders, guardado asíncrono de caché Vulkan, `MAILBOX`, ADPF y ajuste dedicado de partículas/explosiones.
+* **`v0.6.1`:**
   * Asistente de instalación renovado paso a paso en 4 etapas (*Permisos*, *Base obligatoria*, *DLCs* y *Mods/Resumen*).
   * Captura automática de fallos Java y cierres nativos con opciones para **copiar al portapapeles** o **guardar en `.txt`** dentro de `logs/` + exportación manual de diagnóstico desde *Archivos*.
   * Botón/gesto **Atrás** en juego con menú superpuesto para regresar limpiamente al launcher sin reiniciar el sistema.

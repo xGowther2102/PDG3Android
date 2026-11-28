@@ -295,13 +295,22 @@ public final class CrashReporter {
 
             try (InputStream is = info.getTraceInputStream()) {
                 if (is != null) {
-                    String trace = readStreamUtf8(is, 24 * 1024);
-                    if (!trace.trim().isEmpty()) {
-                        sb.append("\n--- Traza del Sistema ---\n").append(trace.trim()).append('\n');
+                    byte[] raw = readStreamBytes(is, 24 * 1024);
+                    if (raw.length > 0) {
+                        if (isReadableText(raw)) {
+                            String trace = new String(raw, StandardCharsets.UTF_8).trim();
+                            if (!trace.isEmpty()) {
+                                sb.append("\n--- Traza del Sistema ---\n").append(trace).append('\n');
+                            }
+                        } else {
+                            sb.append("\n--- Traza del Sistema ---\n")
+                                    .append("(Traza binaria protobuf omitida; consultar la traza nativa en Logcat de crash abajo.)\n");
+                        }
                     }
                 }
             } catch (Throwable ignored) {}
         }
+        appendCrashLogcatTail(sb, 100);
         appendIniSummary(sb, baseDir);
         appendLogTail(sb, baseDir, 60);
         appendLogcatTail(sb, 80);
@@ -368,6 +377,19 @@ public final class CrashReporter {
         if (lines.isEmpty()) return;
         sb.append("\n--- Últimas líneas de dod3.log ---\n");
         for (String l : lines) sb.append(l).append('\n');
+    }
+
+    private static void appendCrashLogcatTail(StringBuilder sb, int maxLines) {
+        try {
+            java.lang.Process p = new ProcessBuilder("logcat", "-d", "-b", "crash", "-v", "time", "-t", String.valueOf(maxLines))
+                    .redirectErrorStream(true)
+                    .start();
+            String out = readStreamUtf8(p.getInputStream(), 24 * 1024);
+            p.waitFor();
+            if (!out.trim().isEmpty()) {
+                sb.append("\n--- Registro nativo de fallos (logcat crash) ---\n").append(out.trim()).append('\n');
+            }
+        } catch (Throwable ignored) {}
     }
 
     private static void appendLogcatTail(StringBuilder sb, int maxLines) {
@@ -485,7 +507,7 @@ public final class CrashReporter {
         }
     }
 
-    private static String readStreamUtf8(InputStream is, int maxBytes) {
+    private static byte[] readStreamBytes(InputStream is, int maxBytes) {
         try {
             byte[] buf = new byte[4096];
             int total = 0;
@@ -495,7 +517,29 @@ public final class CrashReporter {
                 baos.write(buf, 0, n);
                 total += n;
             }
-            return baos.toString("UTF-8");
+            return baos.toByteArray();
+        } catch (Throwable ignored) {
+            return new byte[0];
+        }
+    }
+
+    private static boolean isReadableText(byte[] raw) {
+        if (raw == null || raw.length == 0) return false;
+        int len = Math.min(raw.length, 512);
+        int bad = 0;
+        for (int i = 0; i < len; i++) {
+            int b = raw[i] & 0xFF;
+            if (b == 0) return false;
+            if (b < 0x20 && b != '\n' && b != '\r' && b != '\t') bad++;
+        }
+        return bad * 20 <= len;
+    }
+
+    private static String readStreamUtf8(InputStream is, int maxBytes) {
+        byte[] raw = readStreamBytes(is, maxBytes);
+        if (raw.length == 0) return "";
+        try {
+            return new String(raw, StandardCharsets.UTF_8);
         } catch (Throwable ignored) {
             return "";
         }

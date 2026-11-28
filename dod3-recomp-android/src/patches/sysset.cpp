@@ -531,6 +531,13 @@ void apply_player_settings()
     if (const char* v = getenv("DOD3_DISTORTION"); v && off(v)) {
         apply_list("Distortion=0,FilteredDistortion=0,DropParticleDistortion=1,bAllowDownsampledTranslucency=1", ',');
     }
+    if (const char* v = getenv("DOD3_PARTICLES"); v && *v) {
+        if (!strcasecmp(v, "low")) {
+            apply_list("ParticleLODBias=2,AllowRadialBlur=0,DropParticleDistortion=1,bAllowDownsampledTranslucency=1,LensFlares=0,bAllowLightShafts=0,DynamicDecals=0,UnbatchedDecals=0", ',');
+        } else if (!strcasecmp(v, "medium")) {
+            apply_list("ParticleLODBias=1,AllowRadialBlur=0,DropParticleDistortion=1,bAllowDownsampledTranslucency=1", ',');
+        }
+    }
 }
 
 }  // namespace

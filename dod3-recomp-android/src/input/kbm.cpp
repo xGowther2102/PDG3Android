@@ -439,8 +439,15 @@ static bool on_steam_deck()
 
 void dod3_kbm_install()
 {
+#ifdef __ANDROID__
+    {
+        const char* e = getenv("DOD3_KEYBOARD");
+        if (!e || strcmp(e, "1") != 0) return;
+    }
+#else
     if (const char* e = getenv("DOD3_KEYBOARD"))
         if (!strcmp(e, "0")) return;
+#endif
 #ifdef __linux__
     /* A Steam Deck, started outside Steam (Desktop Mode, from a terminal or
      * the file manager): Steam's Desktop Configuration turns the Deck's own

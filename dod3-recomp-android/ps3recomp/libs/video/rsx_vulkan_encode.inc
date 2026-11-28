@@ -1078,18 +1078,107 @@ static void eng_pso_cache_init(void)
     }
 }
 
+#ifdef __ANDROID__
+typedef struct {
+    char* path;
+    void* buf;
+    size_t sz;
+} EngPsoSaveJob;
+
+static int s_pso_save_busy = 0;
+
+static void* eng_pso_save_thread(void* arg)
+{
+    EngPsoSaveJob* job = (EngPsoSaveJob*)arg;
+    if (job && job->path && job->buf && job->sz > 0) {
+        size_t plen = strlen(job->path);
+        char* tmp = (char*)malloc(plen + 8);
+        if (tmp) {
+            snprintf(tmp, plen + 8, "%s.tmp", job->path);
+            FILE* f = fopen(tmp, "wb");
+            if (f) {
+                const size_t wr = fwrite(job->buf, 1, job->sz, f);
+                fflush(f);
+                fclose(f);
+                if (wr == job->sz && rename(tmp, job->path) == 0) {
+                    fprintf(stderr, "[rsx engine/vulkan] pipeline cache saved (%zu bytes -> %s, async)\n",
+                            job->sz, job->path);
+                } else {
+                    remove(tmp);
+                }
+            }
+            free(tmp);
+        }
+    }
+    if (job) {
+        free(job->path);
+        free(job->buf);
+        free(job);
+    }
+    __atomic_store_n(&s_pso_save_busy, 0, __ATOMIC_RELEASE);
+    return NULL;
+}
+#endif
+
 static void eng_pso_cache_save(int force)
 {
     if (!s_dev || !s_pso_cache || !s_pso_built_since_save) return;
     const char* path = getenv("PS3RECOMP_VK_PIPELINE_CACHE");
     if (!path || !*path) return;
     const ULONGLONG now_ms = GetTickCount64();
+#ifdef __ANDROID__
+    if (!force && ((s_pso_last_save_ms && (now_ms - s_pso_last_save_ms) < 45000ull) || s_pso_built_since_save < 8)) return;
+    if (!force && __atomic_exchange_n(&s_pso_save_busy, 1, __ATOMIC_ACQ_REL) != 0) return;
+    if (force) {
+        for (int w = 0; w < 50 && __atomic_load_n(&s_pso_save_busy, __ATOMIC_ACQUIRE) != 0; w++) {
+            usleep(10000);
+        }
+    }
+#else
     if (!force && ((s_pso_last_save_ms && (now_ms - s_pso_last_save_ms) < 30000ull) || s_pso_built_since_save < 4)) return;
+#endif
     size_t sz = 0;
-    if (vkGetPipelineCacheData(s_dev, s_pso_cache, &sz, NULL) != VK_SUCCESS || sz == 0) return;
+    if (vkGetPipelineCacheData(s_dev, s_pso_cache, &sz, NULL) != VK_SUCCESS || sz == 0) {
+#ifdef __ANDROID__
+        if (!force) __atomic_store_n(&s_pso_save_busy, 0, __ATOMIC_RELEASE);
+#endif
+        return;
+    }
     void* buf = malloc(sz);
-    if (!buf) return;
+    if (!buf) {
+#ifdef __ANDROID__
+        if (!force) __atomic_store_n(&s_pso_save_busy, 0, __ATOMIC_RELEASE);
+#endif
+        return;
+    }
     if (vkGetPipelineCacheData(s_dev, s_pso_cache, &sz, buf) == VK_SUCCESS && sz > 0) {
+#ifdef __ANDROID__
+        if (!force) {
+            EngPsoSaveJob* job = (EngPsoSaveJob*)malloc(sizeof *job);
+            char* path_copy = _strdup(path);
+            if (job && path_copy) {
+                job->path = path_copy;
+                job->buf = buf;
+                job->sz = sz;
+                pthread_attr_t at;
+                pthread_attr_init(&at);
+                pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+                pthread_t th;
+                int rc = pthread_create(&th, &at, eng_pso_save_thread, job);
+                pthread_attr_destroy(&at);
+                if (rc == 0) {
+                    s_pso_built_since_save = 0;
+                    s_pso_last_save_ms = now_ms;
+                    return;
+                }
+            }
+            free(path_copy);
+            free(job);
+            free(buf);
+            __atomic_store_n(&s_pso_save_busy, 0, __ATOMIC_RELEASE);
+            return;
+        }
+#endif
         size_t plen = strlen(path);
         char* tmp = (char*)malloc(plen + 8);
         if (tmp) {
@@ -1110,6 +1199,11 @@ static void eng_pso_cache_save(int force)
             free(tmp);
         }
     }
+#ifdef __ANDROID__
+    else if (!force) {
+        __atomic_store_n(&s_pso_save_busy, 0, __ATOMIC_RELEASE);
+    }
+#endif
     free(buf);
 }
 
@@ -1707,10 +1801,24 @@ static int eng_swapchain_create(void)
     VkPresentModeKHR pms[16]; if (npm > 16) npm = 16;
     vkGetPhysicalDeviceSurfacePresentModesKHR(s_phys, s_surface, &npm, pms);
     VkPresentModeKHR pm = VK_PRESENT_MODE_FIFO_KHR;
+#ifdef __ANDROID__
+    {
+        const char* fifo_e = getenv("RSX_VK_FIFO");
+        int force_fifo = (fifo_e && fifo_e[0] == '1') ? 1 : 0;
+        if (!force_fifo) {
+            /* Prefer tear-free MAILBOX on Android SurfaceFlinger to avoid 60->30 FPS FIFO drops */
+            for (u32 i = 0; i < npm; i++) if (pms[i] == VK_PRESENT_MODE_MAILBOX_KHR) pm = pms[i];
+            if (pm == VK_PRESENT_MODE_FIFO_KHR && !s_vsync) {
+                for (u32 i = 0; i < npm; i++) if (pms[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) pm = pms[i];
+            }
+        }
+    }
+#else
     if (!s_vsync) {
         for (u32 i = 0; i < npm; i++) if (pms[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) pm = pms[i];
         if (pm == VK_PRESENT_MODE_FIFO_KHR) for (u32 i = 0; i < npm; i++) if (pms[i] == VK_PRESENT_MODE_MAILBOX_KHR) pm = pms[i];
     }
+#endif
     if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
         fprintf(stderr, "[RSX vulkan] the swap chain cannot be a blit destination\n");
         return -1;
@@ -1915,9 +2023,18 @@ static int eng_init_device(void)
     else if (is_v12) { f2.pNext = &f12; f12.pNext = s_has_maint5 ? &fm5 : NULL; }
     else { f2.pNext = s_has_maint5 ? &fm5 : NULL; }
     vkGetPhysicalDeviceFeatures2(s_phys, &f2);
+#ifdef __ANDROID__
+    {
+        const char* dr = getenv("RSX_VK_DYN_RENDER");
+        s_has_dyn_rendering = (dr && dr[0] == '1' && is_v13 && f13.dynamicRendering) ? 1 : 0;
+        /* Adreno 830 / Qualcomm libllvm-qgl crashes in vkCreateGraphicsPipelines when dynamic primitive topology is used without explicit feature enablement */
+        s_has_dyn_topo      = 0;
+    }
+#else
     s_has_dyn_rendering = is_v13 && f13.dynamicRendering ? 1 : 0;
-    s_has_timeline      = is_v12 && f12.timelineSemaphore ? 1 : 0;
     s_has_dyn_topo      = is_v13 ? 1 : 0;
+#endif
+    s_has_timeline      = is_v12 && f12.timelineSemaphore ? 1 : 0;
     s_has_bc            = f2.features.textureCompressionBC ? 1 : 0;
     fprintf(stderr, "[rsx engine/vulkan] caps: bc=%d dyn_render=%d timeline=%d dyn_topo=%d\n",
             s_has_bc, s_has_dyn_rendering, s_has_timeline, s_has_dyn_topo);

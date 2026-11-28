@@ -2926,7 +2926,9 @@ static void ps3_indirect_call_full(ppu_context* ctx);
  * is virtual calls through and through. One lookup and this offset reach both.
  * Where a thread-local is a load off a register (Windows, Linux) it saves an
  * instruction or two. 0 until the first call works it out. */
+#ifndef __ANDROID__
 static ptrdiff_t s_tramp_to_depth;
+#endif
 
 /* ps3_indirect_call_to: dispatch to an explicit guest target with CTR left as
  * the guest had it (b<cond>lrl branches through LR; CTR must not change). The
@@ -2963,15 +2965,21 @@ extern "C" void ps3_indirect_call(ppu_context* ctx)
               if ((uint32_t)(e >> 32) == addr && e != 0) dist = (int32_t)(uint32_t)e;
           }
           if (__builtin_expect(dist != 0, 1)) {
+              void (**const tramp)(void*) = &g_trampoline_fn;
+#ifdef __ANDROID__
+              /* Android NDK emutls/Scudo allocates separate per-thread heap blocks with
+               * independent addresses and MTE tags; never reuse TLS deltas across threads. */
+              int* const depth = &g_dispatch_depth;
+#else
               /* The depth and the trampoline through one thread-local
                * lookup (s_tramp_to_depth). */
-              void (**const tramp)(void*) = &g_trampoline_fn;
               ptrdiff_t d = __atomic_load_n(&s_tramp_to_depth, __ATOMIC_RELAXED);
               if (__builtin_expect(!d, 0)) {
                   d = (char*)&g_dispatch_depth - (char*)tramp;
                   __atomic_store_n(&s_tramp_to_depth, d, __ATOMIC_RELAXED);
               }
               int* const depth = (int*)((char*)tramp + d);
+#endif
               if (__builtin_expect(*depth <= 4000, 1)) {
                   const ppu_fn fn = (ppu_fn)(base + dist);
                   ++*depth;

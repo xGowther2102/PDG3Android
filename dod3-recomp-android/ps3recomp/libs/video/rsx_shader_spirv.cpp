@@ -84,9 +84,17 @@ bool translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv, ch
     glslang::GlslangToSpv(*program.getIntermediate(lang), spirv, &logger, &opts);
     if (spirv.empty()) { put_log(log, log_size, "SPIR-V generation", logger.getAllMessages().c_str()); return false; }
 #ifdef __ANDROID__
-    /* Run SPIRV-Tools performance passes (SROA, SSA rewrite, ADCE) so Adreno
-     * does not spill the decompiler's float4 r[48]/h[48] arrays to DDR. */
-    {
+    /* Serialize SPIRV-Tools optimization across worker threads on multi-core SoCs.
+     * Unoptimized glslang SPIR-V can trigger QGL compiler null derefs in vkCreateGraphicsPipelines;
+     * allow opt-out via RSX_SPV_OPT=0 if needed. */
+    static std::mutex s_spv_opt_lock;
+    std::lock_guard<std::mutex> opt_guard(s_spv_opt_lock);
+    static int run_spv_opt = -1;
+    if (run_spv_opt < 0) {
+        const char* env_opt = getenv("RSX_SPV_OPT");
+        run_spv_opt = (env_opt && env_opt[0] == '0') ? 0 : 1;
+    }
+    if (run_spv_opt) {
         spvtools::Optimizer spv_opt(SPV_ENV_VULKAN_1_1);
         spv_opt.RegisterPerformancePasses();
         std::vector<unsigned int> opt_spirv;

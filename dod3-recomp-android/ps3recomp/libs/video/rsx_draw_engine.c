@@ -2477,7 +2477,7 @@ static const char* const kEngFixedPS =
  * a slow one is skipped until it is ready: the effect appears a few frames
  * late, the first time, instead of the game stopping. RSX_ASYNC_SHADERS=0 builds on the walker as
  * before. Metal and D3D12: both backends' pipeline_create are thread-safe. */
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__ANDROID__)
 #if defined(_WIN32)
 /* The pthread names the worker was written with, over Win32: an SRW lock,
  * condition variables and CreateThread. The timed wait takes a deadline the
@@ -2542,6 +2542,8 @@ static int eng_pipe_nthreads(void)
     if (n <= 0) {
 #if defined(_WIN32)
         SYSTEM_INFO si; GetSystemInfo(&si); n = (int)si.dwNumberOfProcessors - 2;
+#elif defined(__ANDROID__)
+        n = 2;
 #else
         n = (int)sysconf(_SC_NPROCESSORS_ONLN) - 2;
 #endif
@@ -2616,7 +2618,11 @@ static eng_pipe_job* eng_pipe_submit(const char* vs, const char* ps, const rsx_b
             if (!s_pj_threads[t]) break;
 #else
             pthread_attr_t at; pthread_attr_init(&at);
+#ifdef __ANDROID__
+            pthread_attr_setstacksize(&at, 16u << 20);
+#else
             pthread_attr_setstacksize(&at, 64u << 20);   /* glslang and spirv-opt recurse deeply */
+#endif
             const int rc = pthread_create(&s_pj_threads[t], &at, eng_pipe_worker, NULL);
             pthread_attr_destroy(&at);
             if (rc != 0) break;
@@ -2634,7 +2640,11 @@ static eng_pipe_job* eng_pipe_submit(const char* vs, const char* ps, const rsx_b
     static long wait_ms = -1;
     static u32 budget_frame;
     static long left_us;
+#ifdef __ANDROID__
+    if (wait_ms < 0) { const char* e = getenv("RSX_ASYNC_WAIT_MS"); wait_ms = e ? atol(e) : 3; }
+#else
     if (wait_ms < 0) { const char* e = getenv("RSX_ASYNC_WAIT_MS"); wait_ms = e ? atol(e) : 8; }
+#endif
     if (budget_frame != g.frames) { budget_frame = g.frames; left_us = wait_ms * 1000L; }
     if (left_us > 0) {
         struct timespec t0, dl; timespec_get(&t0, TIME_UTC);
@@ -2913,7 +2923,7 @@ static void eng_guest_rebuild(void)
             o += 16 + (long)n_; } } while (0)
     static char line[16384];
     u32 lines = 0, built = 0, failed = 0, missing = 0, changed = 0;
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__ANDROID__)
     eng_pipe_job** jobs = NULL; u32 njobs = 0, capjobs = 0;
 #endif
     while (fgets(line, sizeof line, f)) {
@@ -2991,7 +3001,7 @@ static void eng_guest_rebuild(void)
             changed++;
             fprintf(remap, "%016llx %016llx %016llx %016llx\n", ovs, (unsigned long long)nvs, ops, (unsigned long long)nps);
         }
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__ANDROID__)
         if (eng_async_on()) {
             eng_pipe_job* j = eng_pipe_submit(s_vs_hlsl, s_ps_hlsl, &rs, &layout, layout.stride, (rsx_be_format)rtf, rtc);
             if (j) {
@@ -3006,7 +3016,7 @@ static void eng_guest_rebuild(void)
         else failed++;
     }
 #undef GL_FIND
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__ANDROID__)
     for (u32 i = 0; i < njobs; i++) {
         while (!__atomic_load_n(&jobs[i]->done, __ATOMIC_ACQUIRE)) {
             pj_lock(&s_pj_mu);
@@ -3266,7 +3276,7 @@ key_done:;
                              ucp, vp_bb, layout, rt_fmt, rt_count, rs);
     }
     struct eng_pipe_job* job = NULL;
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__ANDROID__)
     if (vi > 0 && fi > 0 && !fixed && eng_async_on()) {
         job = eng_pipe_submit(s_vs_hlsl, s_ps_hlsl, rs, layout, layout->stride, rt_fmt, rt_count);
         if (job && __atomic_load_n(&job->done, __ATOMIC_ACQUIRE)) {
