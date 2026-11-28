@@ -77,6 +77,8 @@ public class VirtualPadView extends View {
         new Btn("DN",   KIND_DPAD_DOWN,   KeyEvent.KEYCODE_DPAD_DOWN, 0),
         new Btn("LT",   KIND_DPAD_LEFT,   KeyEvent.KEYCODE_DPAD_LEFT, 0),
         new Btn("RT",   KIND_DPAD_RIGHT,  KeyEvent.KEYCODE_DPAD_RIGHT, 0),
+        new Btn("L3",   KIND_PILL,        KeyEvent.KEYCODE_BUTTON_THUMBL, 0),
+        new Btn("R3",   KIND_PILL,        KeyEvent.KEYCODE_BUTTON_THUMBR, 0),
     };
 
     private float mToggleCx, mToggleCy, mToggleR;
@@ -177,6 +179,7 @@ public class VirtualPadView extends View {
                 mBtns[4].label = "LB"; mBtns[5].label = "RB";
                 mBtns[6].label = "LT"; mBtns[7].label = "RT";
                 mBtns[8].label = "VIEW"; mBtns[9].label = "MENU"; mBtns[10].label = "LS+RS";
+                mBtns[15].label = "LS"; mBtns[16].label = "RS";
                 break;
 
             case "switch":
@@ -191,7 +194,8 @@ public class VirtualPadView extends View {
                 mBtns[3].label = "X"; mBtns[3].accentColor = Color.rgb(79, 195, 247);
                 mBtns[4].label = "L";  mBtns[5].label = "R";
                 mBtns[6].label = "ZL"; mBtns[7].label = "ZR";
-                mBtns[8].label = "－"; mBtns[9].label = "＋"; mBtns[10].label = "INT";
+                mBtns[8].label = "－"; mBtns[9].label = "＋"; mBtns[10].label = "L3+R3";
+                mBtns[15].label = "L3"; mBtns[16].label = "R3";
                 break;
 
             case "ps4":
@@ -202,7 +206,8 @@ public class VirtualPadView extends View {
                 setPsFaceColors();
                 mBtns[4].label = "L1"; mBtns[5].label = "R1";
                 mBtns[6].label = "L2"; mBtns[7].label = "R2";
-                mBtns[8].label = "SHR"; mBtns[9].label = "OPT"; mBtns[10].label = "INT";
+                mBtns[8].label = "SHR"; mBtns[9].label = "OPT"; mBtns[10].label = "L3+R3";
+                mBtns[15].label = "L3"; mBtns[16].label = "R3";
                 break;
 
             case "ps5":
@@ -213,7 +218,8 @@ public class VirtualPadView extends View {
                 setPsFaceColors();
                 mBtns[4].label = "L1"; mBtns[5].label = "R1";
                 mBtns[6].label = "L2"; mBtns[7].label = "R2";
-                mBtns[8].label = "CRE"; mBtns[9].label = "OPT"; mBtns[10].label = "INT";
+                mBtns[8].label = "CRE"; mBtns[9].label = "OPT"; mBtns[10].label = "L3+R3";
+                mBtns[15].label = "L3"; mBtns[16].label = "R3";
                 break;
 
             default: // ps3
@@ -224,7 +230,8 @@ public class VirtualPadView extends View {
                 setPsFaceColors();
                 mBtns[4].label = "L1"; mBtns[5].label = "R1";
                 mBtns[6].label = "L2"; mBtns[7].label = "R2";
-                mBtns[8].label = "SEL"; mBtns[9].label = "STA"; mBtns[10].label = "INT";
+                mBtns[8].label = "SEL"; mBtns[9].label = "STA"; mBtns[10].label = "L3+R3";
+                mBtns[15].label = "L3"; mBtns[16].label = "R3";
                 break;
         }
     }
@@ -275,6 +282,7 @@ public class VirtualPadView extends View {
             setBtn(12, dx, dy + dd, dr);
             setBtn(13, dx - dd, dy, dr);
             setBtn(14, dx + dd, dy, dr);
+            setPill(15, u * 41.5f, u * 44f, u * 6.2f, u * 3.8f);         // LS / L3
         } else {
             // PlayStation symmetrical layout: D-Pad upper-left, Left Stick lower-left
             mLsR = u * 13.5f; mLsCx = u * 18f; mLsCy = h - u * 22f;
@@ -283,6 +291,7 @@ public class VirtualPadView extends View {
             setBtn(12, dx, dy + dd, dr);
             setBtn(13, dx - dd, dy, dr);
             setBtn(14, dx + dd, dy, dr);
+            setPill(15, u * 41.5f, h - u * 30f, u * 6.2f, u * 3.8f);     // L3
         }
 
         // Right stick (bottom-right inner, clear of face buttons and MENU)
@@ -301,10 +310,11 @@ public class VirtualPadView extends View {
         setPill(5, w - u * 11f, u * 16.5f, u * 8.0f, u * 4.6f);      // R1 / RB / R
         setPill(7, w - u * 29f, u * 12.5f, u * 7.6f, u * 4.6f);      // R2 / RT / ZR
 
-        // Utility center pills (Select / Start / Intoner)
+        // Utility center pills (Select / Start / Intoner / R3)
         setPill(8,  w * 0.41f, h - u * 8.2f, u * 7.0f, u * 3.9f);
         setPill(9,  w * 0.59f, h - u * 8.2f, u * 7.0f, u * 3.9f);
         setPill(10, w - u * 11f, u * 30.5f, u * 7.4f, u * 4.2f);
+        setPill(16, w - u * 52.5f, h - u * 38.5f, u * 6.2f, u * 3.8f); // RS / R3
     }
 
     private void setBtn(int i, float cx, float cy, float r) {

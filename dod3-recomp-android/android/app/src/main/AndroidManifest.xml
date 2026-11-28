@@ -18,6 +18,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:appCategory="game"
+        android:isGame="true"
         android:allowBackup="false"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
@@ -44,6 +45,10 @@
             android:screenOrientation="sensorLandscape"
             android:launchMode="singleTask"
             android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
+
+        <meta-data
+            android:name="android.game_mode_config"
+            android:resource="@xml/game_mode_config" />
 
         <provider
             android:name=".ApkFileProvider"

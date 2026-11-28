@@ -75,7 +75,12 @@ public class Dod3Activity extends SDLActivity {
     private final Runnable mRehideRunnable = () -> {
         hideSystemUI();
         bringOverlaysToFront();
-        initPerformanceHintSession();
+    };
+    private final Runnable mGameplayStateRunnable = () -> {
+        if (!mResumed || isFinishing() || isDestroyed()) return;
+        if (Build.VERSION.SDK_INT >= 33) {
+            setAndroidGameState(false, android.app.GameState.MODE_GAMEPLAY_UNINTERRUPTIBLE);
+        }
     };
 
     private static native long nativeGetPerfStats();
@@ -150,6 +155,10 @@ public class Dod3Activity extends SDLActivity {
         }
         bringOverlaysToFront();
         initPerformanceHintSession();
+        if (Build.VERSION.SDK_INT >= 33) {
+            setAndroidGameState(true, android.app.GameState.MODE_GAMEPLAY_INTERRUPTIBLE);
+            mUiHandler.postDelayed(mGameplayStateRunnable, 8000L);
+        }
     }
 
     private void applyPadPrefsFromIntent(Intent src) {
@@ -502,7 +511,6 @@ public class Dod3Activity extends SDLActivity {
             mFpsView.setVisibility(View.GONE);
         }
         bringOverlaysToFront();
-        initPerformanceHintSession();
     }
 
     @Override
@@ -541,6 +549,7 @@ public class Dod3Activity extends SDLActivity {
     protected void onDestroy() {
         mResumed = false;
         mUiHandler.removeCallbacks(mRehideRunnable);
+        mUiHandler.removeCallbacks(mGameplayStateRunnable);
         if (mHudHandler != null) mHudHandler.removeCallbacks(mHudTick);
         if (mPerfExec != null) mPerfExec.shutdownNow();
         if (Build.VERSION.SDK_INT >= 33 && mBackCallback != null) {
@@ -551,7 +560,20 @@ public class Dod3Activity extends SDLActivity {
             mBackCallback = null;
         }
         closePerformanceHintSession();
+        if (Build.VERSION.SDK_INT >= 33) {
+            setAndroidGameState(false, android.app.GameState.MODE_NONE);
+        }
         super.onDestroy();
+    }
+
+    private void setAndroidGameState(boolean isLoading, int mode) {
+        if (Build.VERSION.SDK_INT < 33) return;
+        try {
+            android.app.GameManager gm = getSystemService(android.app.GameManager.class);
+            if (gm != null) {
+                gm.setGameState(new android.app.GameState(isLoading, mode));
+            }
+        } catch (Throwable ignored) {}
     }
 
     private void initPerformanceHintSession() {
@@ -649,7 +671,6 @@ public class Dod3Activity extends SDLActivity {
         if (mPadView != null) mPadView.resetTouches();
         hideSystemUI();
         bringOverlaysToFront();
-        initPerformanceHintSession();
     }
 
     private void ensureExitOverlayCreated() {

@@ -1880,9 +1880,30 @@ class SDLMain implements Runnable {
             Log.v("SDL", "modify thread properties failed " + e.toString());
         }
 
+        Object sdlPerfSession = null;
+        if (android.os.Build.VERSION.SDK_INT >= 31 && SDLActivity.mSingleton != null) {
+            try {
+                android.os.PerformanceHintManager phm =
+                        SDLActivity.mSingleton.getSystemService(android.os.PerformanceHintManager.class);
+                if (phm != null) {
+                    sdlPerfSession = phm.createHintSession(
+                            new int[]{ android.os.Process.myTid() },
+                            16_666_666L);
+                }
+            } catch (Throwable ignored) {}
+        }
+
         Log.v("SDL", "Running main function " + function + " from library " + library);
 
-        SDLActivity.nativeRunMain(library, function, arguments);
+        try {
+            SDLActivity.nativeRunMain(library, function, arguments);
+        } finally {
+            if (android.os.Build.VERSION.SDK_INT >= 31 && sdlPerfSession != null) {
+                try {
+                    ((android.os.PerformanceHintManager.Session) sdlPerfSession).close();
+                } catch (Throwable ignored) {}
+            }
+        }
 
         Log.v("SDL", "Finished main function");
 
