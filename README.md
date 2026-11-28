@@ -8,7 +8,7 @@
   <img src="assets/pdg3android_logo_white_rounded.png" alt="PDG3Android Logo" width="520" />
 </p>
 
-> **Estado del proyecto:** **En desarrollo activo (`v0.6.2`)** — Funcional y jugable, con mejoras continuas de rendimiento Vulkan y launcher nativo.  
+> **Estado del proyecto:** **En desarrollo activo (`v0.6.3`)** — Funcional y jugable, con mejoras continuas de rendimiento Vulkan y launcher nativo.  
 > **Creador del port Android:** `xGowther2102` · Basado en el trabajo original de recompilación [dod3-recomp](https://github.com/soyjxck/dod3-recomp) y [ps3recomp](https://github.com/soyjxck/ps3recomp).
 
 **PDG3Android** es un port nativo de **Drakengard 3 (BLUS31197)** para Android mediante **recompilación estática PPU/SPU a ARM64** en lugar de emulación tradicional. Las funciones originales del ejecutable de PlayStation 3 se traducen a C++ nativo de 64 bits sobre una implementación propia HLE, **Vulkan nativo**, **SPIR-V**, audio MP3/PCM y sistema de archivos virtual con lectura directa de ISO, `.pkg` y mods sin descomprimir.
@@ -90,7 +90,7 @@
 ## Cómo instalar y jugar
 
 ### 1. Instalar la aplicación
-* Descargar e instalar el archivo `PDG3Android-v0.6.2-release.apk` desde la sección **[Releases](../../releases/latest)**.
+* Descargar e instalar el archivo `PDG3Android-v0.6.3-release.apk` desde la sección **[Releases](../../releases/latest)**.
 
 ### 2. Preparar los archivos en la ruta exacta
 En el almacenamiento interno del dispositivo (`Almacenamiento interno/Drakengard3/`), ubicar cada archivo en su carpeta dedicada:
@@ -127,7 +127,10 @@ En el almacenamiento interno del dispositivo (`Almacenamiento interno/Drakengard
 
 ## Historial de versiones
 
-* **`v0.6.2` (Actual):**
+* **`v0.6.3` (Actual):**
+  * Botones táctiles dedicados para clic de joysticks (`L3` / `R3` o `LS` / `RS`) junto al botón combinado en el pad en pantalla.
+  * Compatibilidad nativa con Android Game Mode (`isGame`, `GameManager` y señalización ADPF en el hilo principal del juego) para solicitar prioridad de rendimiento al sistema.
+* **`v0.6.2`:**
   * Compatibilidad y estabilidad en Android 17 y Adreno 830 (`POCO F8 Pro`), junto con diálogos de fallo legibles.
   * Actualizador integrado vía GitHub Releases con aviso automático, notas de versión (**Qué hay de nuevo**) e instalador directo en la app.
   * Filtrado de mandos virtuales fantasma (`uinput-xiaomi` y similares), glifos de mando nativos y prevención de saltos accidentales de cinemáticas al tocar pantalla.

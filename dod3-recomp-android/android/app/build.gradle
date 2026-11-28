@@ -2,8 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
-def appVersionCode = 4
-def appVersionName = '0.6.2'
+def appVersionCode = 5
+def appVersionName = '0.6.3'
 
 def keystorePropsFile = rootProject.file('keystore.properties')
 def keystoreProps = new Properties()
